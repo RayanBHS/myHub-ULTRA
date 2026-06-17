@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "MyEfrei ULTRA - Chat",
+  "version": "1.0.0",
+  "description": "Module IA et Recherche Intelligente pour myMoodle/MyEfrei ULTRA.",
+  "content_scripts": [
+    {
+      "matches": [
+        "*://moodle.myefrei.fr/*"
+      ],
+      "js": [
+        "js/chat.js"
+      ],
+      "css": [
+        "css/chat.css"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}
