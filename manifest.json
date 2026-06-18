@@ -3,6 +3,16 @@
   "name": "MyEfrei ULTRA - Chat",
   "version": "1.0.0",
   "description": "Module IA et Recherche Intelligente pour myMoodle/MyEfrei ULTRA.",
+  "permissions": [
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://moodle.myefrei.fr/*"
+  ],
+  "action": {
+    "default_popup": "popup/popup.html"
+  },
   "content_scripts": [
     {
       "matches": [
@@ -15,6 +25,16 @@
         "css/chat.css"
       ],
       "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "page/chatbot.html"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

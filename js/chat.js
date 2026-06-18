@@ -13,6 +13,7 @@
 
   // ── Shared Moodle config helpers ─────────────────────────────────────────
   const extractMoodleConfig = () => {
+    console.log('[MyEfrei ULTRA] Starting Moodle config extraction...');
     let sesskey = document.documentElement.getAttribute('data-moodle-sesskey');
     let userid = document.documentElement.getAttribute('data-moodle-userid');
 
@@ -52,14 +53,34 @@
     if (sesskey === 'null' || sesskey === 'undefined') sesskey = '';
     if (userid === 'null' || userid === 'undefined') userid = '0';
 
+    console.log(`[MyEfrei ULTRA] Extracted - sesskey: ${sesskey ? 'found' : 'NOT found'}, userid: ${userid && userid !== '0' ? userid : 'NOT found'}`);
+
     try {
       if (sesskey) { document.documentElement.setAttribute('data-moodle-sesskey', sesskey); sessionStorage.setItem('moodle_sesskey', sesskey); }
       if (userid && userid !== '0') { document.documentElement.setAttribute('data-moodle-userid', userid); sessionStorage.setItem('moodle_userid', userid); }
-    } catch (e) {}
+      
+      if (chrome && chrome.storage && chrome.storage.local) {
+        const dataToSave = {};
+        if (sesskey) dataToSave.moodle_sesskey = sesskey;
+        if (userid && userid !== '0') dataToSave.moodle_userid = userid;
+
+        if (Object.keys(dataToSave).length > 0) {
+            chrome.storage.local.set(dataToSave, () => {
+                console.log('[MyEfrei ULTRA] Session data saved to extension storage:', dataToSave);
+            });
+        } else {
+            console.log('[MyEfrei ULTRA] No session data to save.');
+        }
+      }
+
+    } catch (e) {
+        console.error('[MyEfrei ULTRA] Error saving session data:', e);
+    }
 
     return { sesskey: sesskey || '', userid: userid ? parseInt(userid, 10) : 0 };
   };
 
+  // The rest of the file remains the same...
   const callMoodleAjax = async (methodname, args) => {
     if (!currentSesskey || !currentUserId) {
       const config = extractMoodleConfig();
@@ -98,7 +119,6 @@
     check();
   });
 
-  // ── String helpers ────────────────────────────────────────────────────────
   const normalizeStr = (s) => {
     if (!s) return '';
     let norm = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -123,7 +143,6 @@
     return dp[m][n];
   };
 
-  // ── Fuzzy Score (0-1) ────────────────────────────────────────────────────
   const fuzzyScore = (query, target) => {
     if (!query || !target) return 0;
     const q = normalizeStr(query);
@@ -243,7 +262,6 @@
 
   const MATCH_THRESHOLD = 0.5;
 
-  // ── Moodle API helpers ────────────────────────────────────────────────────
   const getMyCourses = async () => {
     try {
       const cached = sessionStorage.getItem('mymoodle_courses_cache');
@@ -331,7 +349,6 @@
     }
   };
 
-  // ── Deep Moodle Search ────────────────────────────────────────────────────
   const deepSearchMoodle = async (query) => {
     const results = [];
     const origin = window.location.origin;
@@ -415,7 +432,6 @@
       results.push({ type: 'course', icon: '📚', title: cleanCourseTitle(c.fullname), subtitle: c.shortname || c.fullname, url: `${origin}/course/view.php?id=${c.id}`, score: c._score });
     }
 
-    // Calendar events
     try {
       const calendarEvents = await getCalendarEvents();
       let calendarFilterQuery = '';
@@ -460,7 +476,6 @@
       }
     } catch (e) { console.warn('[IA Search] calendar search failed:', e.message); }
 
-    // Native Moodle content search
     try {
       const searchQ = isScopedSearch ? cleanQuery : query;
       if (searchQ) {
@@ -482,7 +497,6 @@
       }
     } catch (e) { console.warn('[IA Search] native content search failed:', e.message); }
 
-    // Deep course contents scan
     const coursesToScan = (isScopedSearch && targetCourse) ? [targetCourse] : allCourses.slice(0, 25);
     const contentPromises = coursesToScan.map(c => getCourseContents(c.id).then(sections => ({ course: c, sections })));
     const courseContents = await Promise.allSettled(contentPromises);
@@ -557,7 +571,6 @@
       }
     }
 
-    // Users
     if (!isScopedSearch) {
       try {
         const userHits = await searchUsers(query);
@@ -577,7 +590,6 @@
       .slice(0, 5);
   };
 
-  // ── Result rendering ──────────────────────────────────────────────────────
   const iaRenderResults = (results, query) => {
     if (results.length === 0) return `<div class="ia-no-results">😕 Je n'ai rien trouvé, déso.</div>`;
     const typeLabel = { course: 'Cours', section: 'Section', resource: 'Ressource', assign: 'Devoir', quiz: 'Quiz', forum: 'Forum', page: 'Page', folder: 'Dossier', url: 'Lien', user: 'Utilisateur', module: 'Activité', file: 'Fichier', deadline: 'Date limite' };
@@ -608,7 +620,6 @@
     return html;
   };
 
-  // ── Adaptive suggestions ─────────────────────────────────────────────────
   const getAdaptedSuggestions = (results, query) => {
     const destinations = [
       { name: "États-Unis", keywords: ["etats unis","usa","us","united states","irvine","uci","california","californie","los angeles","lax","anteaters"] },
@@ -656,7 +667,6 @@
     return results && results.length > 0 ? ['Chercher un cours', 'Mes devoirs', 'Mes deadlines'] : ['Essayer une autre orthographe', 'Mes devoirs', 'Mes deadlines'];
   };
 
-  // ── AI Chat UI helpers ─────────────────────────────────────────────────────
   const getAiMessages = () => {
     if (aiMessages.length === 0) {
       aiMessages.push({
@@ -700,7 +710,6 @@
       chip.className = 'ia-suggestion-chip';
       chip.textContent = s;
       chip.addEventListener('click', () => {
-        // Re-dispatch as if user sent message
         window.dispatchEvent(new CustomEvent('ultramoodle-ai-send-message', { detail: { text: s } }));
       });
       suggestionsContainer.appendChild(chip);
@@ -720,7 +729,6 @@
 
   const removeAiTyping = (el) => { if (el && el.parentNode) el.parentNode.removeChild(el); };
 
-  // ── Intercept result-card clicks to prevent Moodle router crash ───────────
   const stopResultCardEvents = ['click','mousedown','mouseup','pointerdown','pointerup','touchstart','touchend'];
   stopResultCardEvents.forEach(evt => {
     document.addEventListener(evt, (e) => {
@@ -738,7 +746,6 @@
     }, true);
   });
 
-  // ── Handle AI message processing ──────────────────────────────────────────
   const handleAiChatMessage = async (text) => {
     const cfg = extractMoodleConfig();
     if (cfg.sesskey) currentSesskey = cfg.sesskey;
@@ -764,9 +771,7 @@
     }
   };
 
-  // ── Listen to CustomEvents from the main extension ───────────────────────
   window.addEventListener('ultramoodle-ai-selected', () => {
-    // Render the AI welcome / message history into the chat panel
     renderAiChat();
     setAiSuggestions(['Mes devoirs', 'Mes quiz', 'Mes deadlines']);
   });
@@ -774,10 +779,12 @@
   window.addEventListener('ultramoodle-ai-send-message', async (e) => {
     const text = e.detail && e.detail.text;
     if (!text) return;
-    // Also update the input field display if present
     const inputField = document.querySelector('.oneui-input-field');
     if (inputField) { inputField.value = ''; inputField.style.height = 'auto'; }
     await handleAiChatMessage(text);
   });
+
+  // NEW: Wait for the entire window to load before extracting the config
+  window.addEventListener('load', extractMoodleConfig);
 
 })();
