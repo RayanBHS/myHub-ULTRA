@@ -27,6 +27,21 @@
       "run_at": "document_start"
     }
   ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "img/logoMyHub.png",
+      "32": "img/logoMyHub.png",
+      "48": "img/logoMyHub.png",
+      "128": "img/logoMyHub.png"
+    }
+  },
+  "icons": {
+    "16": "img/logoMyHub.png",
+    "32": "img/logoMyHub.png",
+    "48": "img/logoMyHub.png",
+    "128": "img/logoMyHub.png"
+  },
   "web_accessible_resources": [
     {
       "resources": [
