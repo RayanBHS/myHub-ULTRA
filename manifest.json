@@ -8,15 +8,22 @@
     "storage"
   ],
   "host_permissions": [
-    "*://moodle.myefrei.fr/*"
+    "*://moodle.myefrei.fr/*",
+    "*://*.myefrei.fr/*",
+    "*://*.efrei.fr/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup/popup.html"
   },
   "content_scripts": [
     {
       "matches": [
-        "*://moodle.myefrei.fr/*"
+        "*://moodle.myefrei.fr/*",
+        "*://*.myefrei.fr/*",
+        "*://*.efrei.fr/*"
       ],
       "js": [
         "js/chat.js"
@@ -27,15 +34,6 @@
       "run_at": "document_start"
     }
   ],
-  "action": {
-    "default_popup": "popup/popup.html",
-    "default_icon": {
-      "16": "img/logoMyHub.png",
-      "32": "img/logoMyHub.png",
-      "48": "img/logoMyHub.png",
-      "128": "img/logoMyHub.png"
-    }
-  },
   "icons": {
     "16": "img/logoMyHub.png",
     "32": "img/logoMyHub.png",
@@ -45,7 +43,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "page/chatbot.html"
+        "page/chatbot.html",
+        "img/*"
       ],
       "matches": [
         "<all_urls>"

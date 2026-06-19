@@ -1,17 +1,26 @@
 // MyEfrei ULTRA - Chat | AI Content Script
-// Runs at document_start — signals presence immediately
+// Runs at document_start — signals presence immediately and adapts behavior based on site
 (function () {
   'use strict';
 
-  // ── Signal presence to the main extension via DOM attribute ─────────────
+  // ── Signal presence via DOM attribute ────────────────────────────────────
   document.documentElement.setAttribute('data-myefrei-chat-enabled', 'true');
+
+  const isMoodle = window.location.hostname.includes('moodle.');
 
   // ── Module-level AI state ────────────────────────────────────────────────
   let aiMessages = [];
   let currentUserId = 0;
   let currentSesskey = '';
 
-  // ── Shared Moodle config helpers ─────────────────────────────────────────
+  // Focus module settings (toggles)
+  let focusSettings = {
+    myefrei: true,
+    moodle: true,
+    message: true
+  };
+
+  // ── Shared Moodle config helpers (Only needed on Moodle origin) ───────────
   const extractMoodleConfig = () => {
     console.log('[MyEfrei ULTRA] Starting Moodle config extraction...');
     let sesskey = document.documentElement.getAttribute('data-moodle-sesskey');
@@ -68,11 +77,8 @@
             chrome.storage.local.set(dataToSave, () => {
                 console.log('[MyEfrei ULTRA] Session data saved to extension storage:', dataToSave);
             });
-        } else {
-            console.log('[MyEfrei ULTRA] No session data to save.');
         }
       }
-
     } catch (e) {
         console.error('[MyEfrei ULTRA] Error saving session data:', e);
     }
@@ -80,7 +86,23 @@
     return { sesskey: sesskey || '', userid: userid ? parseInt(userid, 10) : 0 };
   };
 
-  // The rest of the file remains the same...
+  // ── Helper to fetch via Background script (cross-origin bypass) ─────────
+  const fetchViaBackground = (url, options) => {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ action: 'fetch', url, options }, (response) => {
+        if (chrome.runtime.lastError) {
+          return reject(new Error(chrome.runtime.lastError.message));
+        }
+        if (response && response.success) {
+          resolve(response.data);
+        } else {
+          reject(new Error((response && response.error) || 'Failed to fetch via background'));
+        }
+      });
+    });
+  };
+
+  // ── Shared Moodle AJAX callers ───────────────────────────────────────────
   const callMoodleAjax = async (methodname, args) => {
     if (!currentSesskey || !currentUserId) {
       const config = extractMoodleConfig();
@@ -104,6 +126,25 @@
     return data[0].data;
   };
 
+  const callMoodleAjaxCrossPlatform = async (methodname, args, sesskey, userid) => {
+    const url = `https://moodle.myefrei.fr/lib/ajax/service.php?sesskey=${sesskey}&info=${methodname}`;
+    try {
+      const responseData = await fetchViaBackground(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([{ index: 0, methodname, args }])
+      });
+      if (!responseData || !responseData[0]) throw new Error('Invalid AJAX response format');
+      if (responseData[0].error) {
+        const ex = responseData[0].exception;
+        throw new Error(ex ? (typeof ex === 'object' ? (ex.message || JSON.stringify(ex)) : ex) : 'Moodle AJAX exception');
+      }
+      return responseData[0].data;
+    } catch (e) {
+      throw new Error(`Moodle AJAX failed via background proxy: ${e.message}`);
+    }
+  };
+
   const waitForUserId = () => new Promise((resolve, reject) => {
     if (currentUserId && currentUserId !== 0) { resolve(currentUserId); return; }
     let tries = 0;
@@ -119,6 +160,7 @@
     check();
   });
 
+  // ── Fuzzy Search Algorithmic utilities ───────────────────────────────────
   const normalizeStr = (s) => {
     if (!s) return '';
     let norm = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -262,6 +304,7 @@
 
   const MATCH_THRESHOLD = 0.5;
 
+  // ── Moodle Native searches (direct on moodle origin) ────────────────────
   const getMyCourses = async () => {
     try {
       const cached = sessionStorage.getItem('mymoodle_courses_cache');
@@ -349,6 +392,7 @@
     }
   };
 
+  // ── Moodle Deep Search Engine (runs direct on Moodle pages) ─────────────
   const deepSearchMoodle = async (query) => {
     const results = [];
     const origin = window.location.origin;
@@ -590,8 +634,9 @@
       .slice(0, 5);
   };
 
+  // ── Moodle Result Render HTML ────────────────────────────────────────────
   const iaRenderResults = (results, query) => {
-    if (results.length === 0) return `<div class="ia-no-results">😕 Je n'ai rien trouvé, déso.</div>`;
+    if (results.length === 0) return `<div class="ia-no-results">😕 Je n'ai rien trouvé, désolé.</div>`;
     const typeLabel = { course: 'Cours', section: 'Section', resource: 'Ressource', assign: 'Devoir', quiz: 'Quiz', forum: 'Forum', page: 'Page', folder: 'Dossier', url: 'Lien', user: 'Utilisateur', module: 'Activité', file: 'Fichier', deadline: 'Date limite' };
     const fileCount = results.filter(r => r.type === 'file').length;
     const deadlineCount = results.filter(r => r.type === 'deadline').length;
@@ -667,124 +712,1590 @@
     return results && results.length > 0 ? ['Chercher un cours', 'Mes devoirs', 'Mes deadlines'] : ['Essayer une autre orthographe', 'Mes devoirs', 'Mes deadlines'];
   };
 
-  const getAiMessages = () => {
-    if (aiMessages.length === 0) {
-      aiMessages.push({
-        useridfrom: 0,
-        text: `<div class="ia-welcome"><div class="ia-welcome-icon">🔍</div><strong>Recherche Moodle intelligente</strong><p>Je peux trouver n'importe quel contenu : cours, fichiers, devoirs, quiz, deadlines, calendriers, utilisateurs… même avec des fautes de frappe !</p><p class="ia-welcome-hint">Essaie par exemple : <em>"deadlines"</em>, <em>"devoir en eco"</em>, <em>"algo"</em></p></div>`,
-        timecreated: Date.now() / 1000
+  // ═════════════════════════════════════════════════════════════════════════
+  // ── MOODLE ORIGIN ENTRYPOINT LOGIC ───────────────────────────────────────
+  // ═════════════════════════════════════════════════════════════════════════
+  if (isMoodle) {
+    const getAiMessages = () => {
+      if (aiMessages.length === 0) {
+        aiMessages.push({
+          useridfrom: 0,
+          text: `<div class="ia-welcome"><div class="ia-welcome-icon">🔍</div><strong>Recherche Moodle intelligente</strong><p>Je peux trouver n'importe quel contenu : cours, fichiers, devoirs, quiz, deadlines, calendriers, utilisateurs… même avec des fautes de frappe !</p><p class="ia-welcome-hint">Essaie par exemple : <em>"deadlines"</em>, <em>"devoir en eco"</em>, <em>"algo"</em></p></div>`,
+          timecreated: Date.now() / 1000
+        });
+      }
+      return aiMessages;
+    };
+
+    const renderAiChat = () => {
+      const history = document.querySelector('.oneui-chat-history');
+      if (!history) return;
+      history.innerHTML = '';
+      const dateHeader = document.createElement('div');
+      dateHeader.className = 'oneui-chat-day-header';
+      dateHeader.textContent = 'Assistant Virtuel';
+      history.appendChild(dateHeader);
+
+      const cfg = extractMoodleConfig();
+      const myUserId = cfg.userid || currentUserId;
+
+      getAiMessages().forEach(msg => {
+        const isSelf = msg.useridfrom !== 0 && msg.useridfrom === myUserId;
+        const timeStr = new Date(msg.timecreated * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+        const wrapper = document.createElement('div');
+        wrapper.className = `oneui-message-wrapper ${isSelf ? 'self' : 'other'} ${!isSelf ? 'ia-bot-wrapper' : ''}`;
+        wrapper.innerHTML = `<div class="oneui-message-bubble ${!isSelf ? 'oneui-message-bubble-ai' : ''}"><div class="oneui-message-text">${msg.text}</div></div><div class="oneui-message-time">${timeStr}</div>`;
+        history.appendChild(wrapper);
       });
-    }
-    return aiMessages;
-  };
+      history.scrollTop = history.scrollHeight;
+    };
 
-  const renderAiChat = () => {
-    const history = document.querySelector('.oneui-chat-history');
-    if (!history) return;
-    history.innerHTML = '';
-    const dateHeader = document.createElement('div');
-    dateHeader.className = 'oneui-chat-day-header';
-    dateHeader.textContent = 'Assistant Virtuel';
-    history.appendChild(dateHeader);
-
-    const cfg = extractMoodleConfig();
-    const myUserId = cfg.userid || currentUserId;
-
-    getAiMessages().forEach(msg => {
-      const isSelf = msg.useridfrom !== 0 && msg.useridfrom === myUserId;
-      const timeStr = new Date(msg.timecreated * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-      const wrapper = document.createElement('div');
-      wrapper.className = `oneui-message-wrapper ${isSelf ? 'self' : 'other'} ${!isSelf ? 'ia-bot-wrapper' : ''}`;
-      wrapper.innerHTML = `<div class="oneui-message-bubble ${!isSelf ? 'oneui-message-bubble-ai' : ''}"><div class="oneui-message-text">${msg.text}</div></div><div class="oneui-message-time">${timeStr}</div>`;
-      history.appendChild(wrapper);
-    });
-    history.scrollTop = history.scrollHeight;
-  };
-
-  const setAiSuggestions = (suggestions) => {
-    const suggestionsContainer = document.querySelector('.ia-chatbot-suggestions');
-    if (!suggestionsContainer) return;
-    suggestionsContainer.innerHTML = '';
-    suggestions.forEach(s => {
-      const chip = document.createElement('button');
-      chip.className = 'ia-suggestion-chip';
-      chip.textContent = s;
-      chip.addEventListener('click', () => {
-        window.dispatchEvent(new CustomEvent('ultramoodle-ai-send-message', { detail: { text: s } }));
+    const setAiSuggestions = (suggestions) => {
+      const suggestionsContainer = document.querySelector('.ia-chatbot-suggestions');
+      if (!suggestionsContainer) return;
+      suggestionsContainer.innerHTML = '';
+      suggestions.forEach(s => {
+        const chip = document.createElement('button');
+        chip.className = 'ia-suggestion-chip';
+        chip.textContent = s;
+        chip.addEventListener('click', () => {
+          window.dispatchEvent(new CustomEvent('ultramoodle-ai-send-message', { detail: { text: s } }));
+        });
+        suggestionsContainer.appendChild(chip);
       });
-      suggestionsContainer.appendChild(chip);
+    };
+
+    const showAiTyping = () => {
+      const history = document.querySelector('.oneui-chat-history');
+      if (!history) return null;
+      const wrap = document.createElement('div');
+      wrap.className = 'oneui-message-wrapper other ai-typing-wrapper';
+      wrap.innerHTML = `<div class="oneui-message-bubble oneui-message-bubble-ai" style="padding: 10px 14px !important;"><div class="ia-typing"><span></span><span></span><span></span></div></div>`;
+      history.appendChild(wrap);
+      history.scrollTop = history.scrollHeight;
+      return wrap;
+    };
+
+    const removeAiTyping = (el) => { if (el && el.parentNode) el.parentNode.removeChild(el); };
+
+    const stopResultCardEvents = ['click','mousedown','mouseup','pointerdown','pointerup','touchstart','touchend'];
+    stopResultCardEvents.forEach(evt => {
+      document.addEventListener(evt, (e) => {
+        const card = e.target.closest && e.target.closest('.ia-result-card');
+        if (card) {
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          if (evt === 'click') {
+            e.preventDefault();
+            const url = card.getAttribute('href');
+            const target = card.getAttribute('target') || '_self';
+            if (url) window.open(url, target);
+          }
+        }
+      }, true);
     });
-  };
 
-  const showAiTyping = () => {
-    const history = document.querySelector('.oneui-chat-history');
-    if (!history) return null;
-    const wrap = document.createElement('div');
-    wrap.className = 'oneui-message-wrapper other ai-typing-wrapper';
-    wrap.innerHTML = `<div class="oneui-message-bubble oneui-message-bubble-ai" style="padding: 10px 14px !important;"><div class="ia-typing"><span></span><span></span><span></span></div></div>`;
-    history.appendChild(wrap);
-    history.scrollTop = history.scrollHeight;
-    return wrap;
-  };
+    const handleAiChatMessage = async (text) => {
+      const cfg = extractMoodleConfig();
+      if (cfg.sesskey) currentSesskey = cfg.sesskey;
+      if (cfg.userid) currentUserId = cfg.userid;
 
-  const removeAiTyping = (el) => { if (el && el.parentNode) el.parentNode.removeChild(el); };
+      const suggestionsContainer = document.querySelector('.ia-chatbot-suggestions');
+      if (suggestionsContainer) suggestionsContainer.innerHTML = '';
 
-  const stopResultCardEvents = ['click','mousedown','mouseup','pointerdown','pointerup','touchstart','touchend'];
-  stopResultCardEvents.forEach(evt => {
-    document.addEventListener(evt, (e) => {
-      const card = e.target.closest && e.target.closest('.ia-result-card');
-      if (card) {
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        if (evt === 'click') {
-          e.preventDefault();
-          const url = card.getAttribute('href');
-          const target = card.getAttribute('target') || '_self';
-          if (url) window.open(url, target);
+      aiMessages.push({ useridfrom: currentUserId, text, timecreated: Date.now() / 1000 });
+      renderAiChat();
+
+      const typing = showAiTyping();
+      try {
+        const results = await deepSearchMoodle(text);
+        removeAiTyping(typing);
+        aiMessages.push({ useridfrom: 0, text: iaRenderResults(results, text), timecreated: Date.now() / 1000 });
+        renderAiChat();
+        setAiSuggestions(getAdaptedSuggestions(results, text));
+      } catch (err) {
+        removeAiTyping(typing);
+        aiMessages.push({ useridfrom: 0, text: `❌ Une erreur est survenue : <em>${err.message}</em>`, timecreated: Date.now() / 1000 });
+        renderAiChat();
+      }
+    };
+
+    window.addEventListener('ultramoodle-ai-selected', () => {
+      renderAiChat();
+      setAiSuggestions(['Mes devoirs', 'Mes quiz', 'Mes deadlines']);
+    });
+
+    window.addEventListener('ultramoodle-ai-send-message', async (e) => {
+      const text = e.detail && e.detail.text;
+      if (!text) return;
+      const inputField = document.querySelector('.oneui-input-field');
+      if (inputField) { inputField.value = ''; inputField.style.height = 'auto'; }
+      await handleAiChatMessage(text);
+    });
+
+    window.addEventListener('load', extractMoodleConfig);
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // ── MYEFREI PORTAL ENTRYPOINT LOGIC (Full Page Chatbot in /racywama/ai) ──
+  // ═════════════════════════════════════════════════════════════════════════
+  else {
+    // Local preloaded database cache
+    let myefreiCache = {
+      myefreiLoaded: false,
+      myefreiLoading: false,
+      messageLoaded: false,
+      messageLoading: false,
+      periods: [],
+      grades: [],
+      absences: [],
+      documents: [],
+      contacts: [],
+      resources: []
+    };
+
+    // Preload MyEfrei (Grades, Absences, Documents, Resources)
+    const preloadMyEfrei = async () => {
+      if (!focusSettings.myefrei) return;
+      if (myefreiCache.myefreiLoaded || myefreiCache.myefreiLoading) return;
+      myefreiCache.myefreiLoading = true;
+      console.log('[IA Portal] Synchronizing MyEfrei database in background...');
+      try {
+        // 1. Periods
+        const periodsRes = await fetch('/api/rest/student/periods?withHistory=true');
+        if (!periodsRes.ok) throw new Error('API Periods returned error');
+        const periods = await periodsRes.json();
+        myefreiCache.periods = Array.isArray(periods) ? periods : [];
+
+        // 2. Parallel grades & absences
+        const gradesPromises = [];
+        const absencesPromises = [];
+        myefreiCache.periods.forEach(p => {
+          if (p.period && p.schoolYear) {
+            gradesPromises.push(
+              fetch(`/api/rest/student/grades?schoolYear=${p.schoolYear}&period=${p.period}`)
+                .then(r => r.ok ? r.json() : null)
+                .then(data => {
+                  if (data) myefreiCache.grades.push({ period: p.period, schoolYear: p.schoolYear, data });
+                })
+                .catch(() => null)
+            );
+            absencesPromises.push(
+              fetch(`/api/rest/student/absences?schoolYear=${p.schoolYear}&period=${p.period}`)
+                .then(r => r.ok ? r.json() : null)
+                .then(data => {
+                  if (data) {
+                    const arr = Array.isArray(data) ? data : (data.data || data.absences || []);
+                    myefreiCache.absences.push(...arr.map(item => ({ ...item, period: p.period, schoolYear: p.schoolYear })));
+                  }
+                })
+                .catch(() => null)
+            );
+          }
+        });
+
+        // 3. Documents
+        const docsPromises = [
+          fetch('/api/rest/student/schooling/documents').then(r => r.ok ? r.json() : []).catch(() => []),
+          fetch('/api/rest/student/schooling/invoices').then(r => r.ok ? r.json() : []).catch(() => []),
+          fetch('/api/rest/student/schooling/legacy-documents').then(r => r.ok ? r.json() : []).catch(() => [])
+        ];
+
+        // 4. Resources
+        const resourcesPromise = fetch('/api/rest/common/resources/categories?with-resources=true')
+          .then(r => r.ok ? r.json() : [])
+          .then(async (cats) => {
+            const catsArr = Array.isArray(cats) ? cats : [];
+            const detailsPromises = catsArr.map(cat => {
+              return fetch(`/api/rest/common/resources?category=${cat._id}&group=true`)
+                .then(r => r.ok ? r.json() : null)
+                .then(data => {
+                  if (data) {
+                    let parsed = [];
+                    if (typeof data === 'object' && !Array.isArray(data)) {
+                      parsed = Object.keys(data).map(key => ({ name: key, items: Array.isArray(data[key]) ? data[key] : [] }));
+                    } else if (Array.isArray(data)) {
+                      if (data.length > 0 && Array.isArray(data[0].resources)) {
+                        parsed = data.map(g => ({ name: g.name || g.title || 'Autres', items: g.resources }));
+                      } else {
+                        parsed = [{ name: 'Documents', items: data }];
+                      }
+                    }
+                    myefreiCache.resources.push({ category: cat.title, id: cat._id, groups: parsed });
+                  }
+                })
+                .catch(() => null);
+            });
+            await Promise.all(detailsPromises);
+          })
+          .catch(() => {});
+
+        await Promise.all([
+          Promise.all(gradesPromises),
+          Promise.all(absencesPromises),
+          Promise.all(docsPromises).then(([docs, invoices, legacy]) => {
+            myefreiCache.documents = [
+              ...docs.map(d => ({ ...d, source: 'document', title: d.name || d.fileName || 'Document' })),
+              ...invoices.map(d => ({ ...d, source: 'invoice', title: d.name || d.fileName || 'Facture' })),
+              ...legacy.map(d => ({ ...d, source: 'legacy', title: d.name || d.fileName || 'Document Historique' }))
+            ];
+          }),
+          resourcesPromise
+        ]);
+
+        myefreiCache.myefreiLoaded = true;
+        myefreiCache.myefreiLoading = false;
+        console.log('[IA Portal] MyEfrei cache populated successfully!');
+      } catch (err) {
+        myefreiCache.myefreiLoading = false;
+        console.error('[IA Portal] Preloading MyEfrei failed:', err);
+      }
+    };
+
+    // Preload Message (Contacts)
+    const preloadMessage = async () => {
+      if (!focusSettings.message) return;
+      if (myefreiCache.messageLoaded || myefreiCache.messageLoading) return;
+      myefreiCache.messageLoading = true;
+      console.log('[IA Portal] Synchronizing Message (Contacts) database in background...');
+      try {
+        const contactsRes = await fetch('/api/rest/student/contacts');
+        const data = contactsRes.ok ? await contactsRes.json() : [];
+        myefreiCache.contacts = Array.isArray(data) ? data : [];
+        myefreiCache.messageLoaded = true;
+        myefreiCache.messageLoading = false;
+        console.log('[IA Portal] Message cache populated successfully!');
+      } catch (err) {
+        myefreiCache.messageLoading = false;
+        console.error('[IA Portal] Preloading Contacts failed:', err);
+      }
+    };
+
+    // ── Moodle AJAX callers from MyEfrei origin (delegated via service worker) ──
+    const getMyCoursesCrossPlatform = async (sesskey, userid) => {
+      try {
+        return await callMoodleAjaxCrossPlatform('core_course_get_recent_courses', { userid }, sesskey, userid);
+      } catch (e) { return []; }
+    };
+
+    const getCalendarEventsCrossPlatform = async (sesskey, userid) => {
+      try {
+        const now = Math.floor(Date.now() / 1000);
+        const data = await callMoodleAjaxCrossPlatform('core_calendar_get_action_events_by_timesort', {
+          timesortfrom: now - (30 * 24 * 60 * 60),
+          timesortto: now + (150 * 24 * 60 * 60),
+          limitnum: 50, aftereventid: 0
+        }, sesskey, userid);
+        return (data && data.events) ? data.events : [];
+      } catch (e) { return []; }
+    };
+
+    const getCourseContentsCrossPlatform = async (courseId, sesskey, userid) => {
+      try {
+        const data = await callMoodleAjaxCrossPlatform('core_courseformat_get_state', { courseid: courseId }, sesskey, userid);
+        if (data) {
+          let state = typeof data === 'string' ? JSON.parse(data) : data;
+          if (state && Array.isArray(state.section) && Array.isArray(state.cm)) {
+            return state.section.map(sec => {
+              const secModules = state.cm
+                .filter(cm => String(cm.sectionid) === String(sec.id) || String(cm.sectionnumber) === String(sec.number))
+                .map(cm => {
+                  const mod = { id: cm.id, name: cm.name, modname: cm.module || '', url: cm.url || '', contents: [] };
+                  if (cm.module === 'resource') mod.contents.push({ type: 'file', filename: cm.name, fileurl: cm.url });
+                  return mod;
+                });
+              return { name: sec.title || sec.rawtitle || '', section: sec.number, modules: secModules };
+            });
+          }
+        }
+        return [];
+      } catch (e) { return []; }
+    };
+
+    const searchMoodleContentCrossPlatform = async (query, sesskey, userid) => {
+      try {
+        const data = await callMoodleAjaxCrossPlatform('core_search_get_results', { query, filters: {}, page: 0 }, sesskey, userid);
+        return (data && data.results) ? data.results : [];
+      } catch { return []; }
+    };
+
+    const searchUsersCrossPlatform = async (query, sesskey, userid) => {
+      try {
+        const data = await callMoodleAjaxCrossPlatform('core_user_search_identity', { query, capabilities: [] }, sesskey, userid);
+        return (data && data.list) ? data.list : [];
+      } catch {
+        try {
+          const data2 = await callMoodleAjaxCrossPlatform('core_message_search_users', { userid, search: query, limitfrom: 0, limitnum: 10 }, sesskey, userid);
+          return [...(data2.contacts || []), ...(data2.noncontacts || [])];
+        } catch { return []; }
+      }
+    };
+
+    // ── Moodle Deep Search Engine (Cross-platform variant) ────────────────
+    const deepSearchMoodleCrossPlatform = async (query, sesskey, userid) => {
+      const results = [];
+      const origin = 'https://moodle.myefrei.fr';
+      let allCourses = await getMyCoursesCrossPlatform(sesskey, userid);
+      const normQuery = normalizeStr(query);
+
+      let isFilesIntent = false, isDevoirsIntent = false, isQuizIntent = false;
+      let isCalendarIntent = false, isScopedSearch = false;
+      let cleanQuery = query, targetCourseQuery = '', targetCourse = null;
+
+      const calendarKeywords = ['deadlines','deadline','calendrier','agenda','planning','todo','a faire','echeances','echeance'];
+      const hasCalendarKeyword = calendarKeywords.some(kw => {
+        const idx = normQuery.indexOf(kw);
+        if (idx === -1) return false;
+        const before = idx === 0 || normQuery[idx - 1] === ' ';
+        const after = (idx + kw.length) === normQuery.length || [' ','?','!'].includes(normQuery[idx + kw.length]);
+        return before && after;
+      });
+
+      if (normQuery === 'mes devoirs' || normQuery === 'devoirs' || normQuery === 'devoir') isDevoirsIntent = true;
+      else if (normQuery === 'mes quiz' || normQuery === 'quiz' || normQuery === 'qcm') isQuizIntent = true;
+      else if (hasCalendarKeyword) isCalendarIntent = true;
+      else {
+        const match = query.match(/(.+)\s+(dans|de|en)\s+(.+)/i);
+        if (match) {
+          const potentialResource = match[1].trim();
+          const potentialCourse = match[3].trim();
+          let bestScore = 0;
+          for (const c of allCourses) {
+            const score = Math.max(fuzzyScore(potentialCourse, c.fullname || ''), fuzzyScore(potentialCourse, c.shortname || ''));
+            if (score > bestScore && score >= MATCH_THRESHOLD) { bestScore = score; targetCourse = c; }
+          }
+          if (targetCourse) {
+            isScopedSearch = true;
+            targetCourseQuery = potentialCourse;
+            const resLower = potentialResource.toLowerCase().trim();
+            if (['fichiers','fichier','files','file','cours'].includes(resLower)) { isFilesIntent = true; cleanQuery = ''; }
+            else {
+              cleanQuery = potentialResource;
+              if (['devoirs','devoir','assignments','assignment','rendre'].includes(resLower)) isDevoirsIntent = true;
+              else if (['quiz','tests','test','qcm'].includes(resLower)) isQuizIntent = true;
+              else if (calendarKeywords.includes(resLower)) isCalendarIntent = true;
+            }
+          }
+        }
+        if (!targetCourse) {
+          if (normQuery.startsWith('fichiers dans ') || normQuery.startsWith('fichier dans ') || normQuery.startsWith('fichiers de ') || normQuery.startsWith('fichier de ')) {
+            isFilesIntent = true;
+            targetCourseQuery = query.replace(/^(fichiers? (dans|de) )/i, '').trim();
+            let bestScore = 0;
+            for (const c of allCourses) {
+              const score = Math.max(fuzzyScore(targetCourseQuery, c.fullname || ''), fuzzyScore(targetCourseQuery, c.shortname || ''));
+              if (score > bestScore && score >= MATCH_THRESHOLD) { bestScore = score; targetCourse = c; }
+            }
+            cleanQuery = '';
+          }
         }
       }
-    }, true);
-  });
 
-  const handleAiChatMessage = async (text) => {
-    const cfg = extractMoodleConfig();
-    if (cfg.sesskey) currentSesskey = cfg.sesskey;
-    if (cfg.userid) currentUserId = cfg.userid;
+      const coursesWithIndex = allCourses.map((c, index) => ({ c, index }));
+      coursesWithIndex.sort((a, b) => {
+        if (targetCourse) { if (a.c.id === targetCourse.id) return -1; if (b.c.id === targetCourse.id) return 1; }
+        const sA = Math.max(fuzzyScore(query, a.c.fullname || ''), fuzzyScore(query, a.c.shortname || ''));
+        const sB = Math.max(fuzzyScore(query, b.c.fullname || ''), fuzzyScore(query, b.c.shortname || ''));
+        if (sA !== sB) return sB - sA;
+        return a.index - b.index;
+      });
+      allCourses = coursesWithIndex.map(item => item.c);
 
-    const suggestionsContainer = document.querySelector('.ia-chatbot-suggestions');
-    if (suggestionsContainer) suggestionsContainer.innerHTML = '';
+      const courseHits = [];
+      if (isScopedSearch && targetCourse) {
+        courseHits.push({ ...targetCourse, _score: 0.6 });
+      } else {
+        for (const c of allCourses) {
+          const score = Math.max(fuzzyScore(query, c.fullname || ''), fuzzyScore(query, c.shortname || ''));
+          if (score >= MATCH_THRESHOLD) courseHits.push({ ...c, _score: score });
+        }
+        courseHits.sort((a, b) => b._score - a._score);
+      }
+      for (const c of courseHits.slice(0, 4)) {
+        results.push({ type: 'course', icon: '📚', title: cleanCourseTitle(c.fullname), subtitle: c.shortname || c.fullname, url: `${origin}/course/view.php?id=${c.id}`, score: c._score });
+      }
 
-    aiMessages.push({ useridfrom: currentUserId, text, timecreated: Date.now() / 1000 });
-    renderAiChat();
+      try {
+        const calendarEvents = await getCalendarEventsCrossPlatform(sesskey, userid);
+        let calendarFilterQuery = '';
+        if (isCalendarIntent) {
+          const sw = new Set(['les','la','le','un','une','des','du','de','en','pour','mes','mon','ma','prochains','prochaine','prochaines','quand','c','est','deadlines','deadline','calendrier','agenda','planning','todo','a faire','echeances','echeance']);
+          calendarFilterQuery = normQuery.split(/\s+/).filter(w => !sw.has(w)).join(' ');
+        }
+        for (const ev of calendarEvents) {
+          const evName = ev.name || '';
+          const courseName = (ev.course && ev.course.fullname) || '';
+          if (isScopedSearch && targetCourse && (!ev.course || ev.course.id !== targetCourse.id)) continue;
+          const eventTime = ev.timesort || 0;
+          const now = Math.floor(Date.now() / 1000);
+          if (eventTime < now) {
+            const askPast = ['passe','passes','historique','anciens','archive','depasse','depasses','retard','en retard'].some(kw => normQuery.includes(kw));
+            if (!askPast) continue;
+          }
+          const searchQ = isScopedSearch ? cleanQuery : query;
+          let score = 0;
+          if (isCalendarIntent && calendarFilterQuery) {
+            score = Math.max(fuzzyScore(calendarFilterQuery, evName), fuzzyScore(calendarFilterQuery, evName + ' ' + courseName));
+          } else if (searchQ) {
+            score = Math.max(fuzzyScore(searchQ, evName), fuzzyScore(searchQ, evName + ' ' + courseName));
+          } else {
+            score = 0.5;
+          }
+          const isAssignEvent = ev.eventtype === 'due' || ev.modulename === 'assign' || evName.toLowerCase().includes('devoir') || evName.toLowerCase().includes('rendre');
+          const isQuizEvent = ev.modulename === 'quiz' || evName.toLowerCase().includes('quiz') || evName.toLowerCase().includes('test');
+          if (isCalendarIntent) { score = (calendarFilterQuery ? (score >= MATCH_THRESHOLD ? 0.98 : 0) : 0.98); }
+          else if (isDevoirsIntent && isAssignEvent) { score = 0.98; }
+          else if (isQuizIntent && isQuizEvent) { score = 0.98; }
+          if (score >= MATCH_THRESHOLD || (isDevoirsIntent && isAssignEvent) || (isQuizIntent && isQuizEvent) || (isCalendarIntent && !calendarFilterQuery)) {
+            const dateObj = new Date(ev.timesort * 1000);
+            const dateStr = dateObj.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+            results.push({
+              type: 'deadline', icon: '📅', title: evName,
+              subtitle: `${cleanCourseTitle(courseName)} • À rendre : ${dateStr}`,
+              url: ev.url || ev.viewurl || `${origin}/calendar/view.php?view=day&time=${ev.timesort}`,
+              score: isScopedSearch ? 0.90 + (score * 0.09) : Math.max(score, 0.4) + 0.15
+            });
+          }
+        }
+      } catch (e) {}
 
-    const typing = showAiTyping();
-    try {
-      const results = await deepSearchMoodle(text);
-      removeAiTyping(typing);
-      aiMessages.push({ useridfrom: 0, text: iaRenderResults(results, text), timecreated: Date.now() / 1000 });
-      renderAiChat();
-      setAiSuggestions(getAdaptedSuggestions(results, text));
-    } catch (err) {
-      removeAiTyping(typing);
-      aiMessages.push({ useridfrom: 0, text: `❌ Une erreur est survenue : <em>${err.message}</em>`, timecreated: Date.now() / 1000 });
-      renderAiChat();
+      try {
+        const searchQ = isScopedSearch ? cleanQuery : query;
+        if (searchQ) {
+          const nativeResults = await searchMoodleContentCrossPlatform(searchQ, sesskey, userid);
+          for (const nr of nativeResults) {
+            if (isScopedSearch && targetCourse) {
+              const matchesCourse = (nr.coursename && (fuzzyScore(targetCourseQuery, nr.coursename) >= MATCH_THRESHOLD)) || (nr.contextname && (fuzzyScore(targetCourseQuery, nr.contextname) >= MATCH_THRESHOLD));
+              if (!matchesCourse) continue;
+            }
+            const score = fuzzyScore(searchQ, nr.title || '');
+            const isFile = nr.url && (nr.url.includes('/resource/') || nr.url.includes('/file.php') || nr.url.includes('mod_resource'));
+            const ext = isFile ? ((nr.title && nr.title.split('.').pop()) || 'pdf').toLowerCase() : '';
+            results.push({
+              type: isFile ? 'file' : 'activity', icon: isFile ? '📄' : '📌',
+              title: nr.title, subtitle: cleanCourseTitle(nr.coursename || nr.contextname || ''),
+              url: nr.url, score: isScopedSearch ? 0.90 + (score * 0.09) : (score >= MATCH_THRESHOLD ? score + 0.1 : 0.45), ext
+            });
+          }
+        }
+      } catch (e) {}
+
+      const coursesToScan = (isScopedSearch && targetCourse) ? [targetCourse] : allCourses.slice(0, 10);
+      const contentPromises = coursesToScan.map(c => getCourseContentsCrossPlatform(c.id, sesskey, userid).then(sections => ({ course: c, sections })));
+      const courseContents = await Promise.allSettled(contentPromises);
+
+      const moduleTypeIcon = (mod) => {
+        const t = (mod.modname || '').toLowerCase();
+        if (t === 'resource' || t === 'url') return '📄';
+        if (t === 'folder') return '📁';
+        if (t === 'assign') return '📝';
+        if (t === 'quiz') return '❓';
+        if (t === 'forum') return '💬';
+        if (t === 'page') return '🌐';
+        if (t === 'scorm' || t === 'h5pactivity') return '🎮';
+        if (t === 'video' || t === 'videofile') return '🎥';
+        if (t === 'glossary') return '📖';
+        if (t === 'wiki') return '📝';
+        if (t === 'choice') return '🗳️';
+        if (t === 'survey') return '📊';
+        if (t === 'lesson') return '🎓';
+        return '📌';
+      };
+
+      for (const pr of courseContents) {
+        if (pr.status !== 'fulfilled') continue;
+        const { course, sections } = pr.value;
+        for (const section of (sections || [])) {
+          const secName = section.name || '';
+          let secScore = 0;
+          const searchQ = isScopedSearch ? cleanQuery : query;
+          if (searchQ) {
+            secScore = Math.max(fuzzyScore(searchQ, secName), fuzzyScore(searchQ, `${course.fullname} ${secName}`) * 0.8);
+          } else { secScore = 0.5; }
+          if ((secScore >= MATCH_THRESHOLD || isScopedSearch) && secName) {
+            results.push({ type: 'section', icon: '📂', title: secName, subtitle: `Section dans : ${cleanCourseTitle(course.fullname)}`, url: `${origin}/course/view.php?id=${course.id}#section-${section.section}`, score: isScopedSearch ? 0.90 + (secScore * 0.09) : secScore });
+          }
+          if (!section.modules) continue;
+          for (const mod of section.modules) {
+            const modName = mod.name || '';
+            let modScore = 0;
+            if (searchQ) {
+              modScore = Math.max(fuzzyScore(searchQ, modName), fuzzyScore(searchQ, `${course.fullname} ${modName}`) * 0.85, fuzzyScore(searchQ, mod.modname || ''), fuzzyScore(searchQ, secName));
+            } else { modScore = 0.5; }
+            if (isDevoirsIntent && mod.modname === 'assign') modScore = 0.98;
+            else if (isQuizIntent && mod.modname === 'quiz') modScore = 0.98;
+            if (modScore >= MATCH_THRESHOLD || (isDevoirsIntent && mod.modname === 'assign') || (isQuizIntent && mod.modname === 'quiz')) {
+              results.push({ type: mod.modname || 'module', icon: moduleTypeIcon(mod), title: modName, subtitle: `${cleanCourseTitle(course.fullname)}${secName ? ' › ' + secName : ''}`, url: mod.url || `${origin}/course/view.php?id=${course.id}`, score: isScopedSearch ? 0.90 + (modScore * 0.09) : modScore });
+            }
+            if (!mod.contents || !Array.isArray(mod.contents)) continue;
+            for (const file of mod.contents) {
+              if (file.type !== 'file') continue;
+              const fname = file.filename || '';
+              if (!fname || fname === 'index.htm' || fname === 'index.html') continue;
+              let fileScore = 0;
+              if (searchQ) {
+                fileScore = Math.max(
+                  fuzzyScore(searchQ, fname),
+                  fuzzyScore(searchQ, fname.replace(/\.[^.]+$/, '')),
+                  fuzzyScore(searchQ, `${course.fullname} ${modName} ${fname}`) * 0.85,
+                  fuzzyScore(searchQ, modName) * 0.7,
+                  fuzzyScore(searchQ, secName) * 0.5
+                );
+              } else { fileScore = 0.5; }
+              const isTargetCourseFile = targetCourse && course.id === targetCourse.id;
+              if (isTargetCourseFile && (isFilesIntent || fileScore >= MATCH_THRESHOLD)) fileScore = 0.98;
+              if (fileScore >= MATCH_THRESHOLD || (isFilesIntent && isTargetCourseFile)) {
+                const ext = (fname.split('.').pop() || '').toLowerCase();
+                const fileIcon = ext === 'pdf' ? '📕' : ['doc','docx'].includes(ext) ? '📘' : ['xls','xlsx'].includes(ext) ? '📗' : ['ppt','pptx'].includes(ext) ? '📙' : ['zip','rar','7z'].includes(ext) ? '🗜️' : ['mp4','avi','mkv','mov'].includes(ext) ? '🎥' : ['mp3','wav','ogg'].includes(ext) ? '🎵' : ['jpg','jpeg','png','gif','svg'].includes(ext) ? '🖼️' : ['py','js','java','c','cpp','html','css'].includes(ext) ? '💻' : '📄';
+                results.push({ type: 'file', icon: fileIcon, title: fname, subtitle: `${cleanCourseTitle(course.fullname)} › ${modName}${secName ? ' › ' + secName : ''}`, url: file.fileurl || mod.url || `${origin}/course/view.php?id=${course.id}`, score: isScopedSearch ? 0.90 + (fileScore * 0.09) : fileScore, ext });
+              }
+            }
+          }
+        }
+      }
+
+      if (!isScopedSearch) {
+        try {
+          const userHits = await searchUsersCrossPlatform(query, sesskey, userid);
+          for (const u of userHits.slice(0, 2)) {
+            const fullname = u.fullname || ((u.firstname || '') + ' ' + (u.lastname || '')).trim();
+            if (!fullname) continue;
+            results.push({ type: 'user', icon: '👤', title: fullname, subtitle: u.email || '', url: `${origin}/user/profile.php?id=${u.id}`, score: fuzzyScore(query, fullname) + 0.1 });
+          }
+        } catch (e) {}
+      }
+
+      const seen = new Set();
+      return results
+        .filter(r => { if (seen.has(r.url)) return false; seen.add(r.url); return true; })
+        .filter(r => r.score >= 0.5)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 4);
+    };
+
+    // ── Unified Search Engine (MyEfrei database + Moodle cross-platform fallback) ──
+    const searchMyEfreiAndMoodle = async (query) => {
+      const results = [];
+      const normQuery = normalizeStr(query);
+      if (!normQuery) return [];
+
+      // A. Search MyEfrei Grades
+      if (focusSettings.myefrei && myefreiCache.grades.length > 0) {
+        myefreiCache.grades.forEach(periodObj => {
+          const ues = periodObj.data && (periodObj.data.ues || (Array.isArray(periodObj.data) ? periodObj.data : (periodObj.data.grades && periodObj.data.grades.ues)));
+          if (Array.isArray(ues)) {
+            ues.forEach(ue => {
+              const ueName = ue.name || '';
+              const ueScore = fuzzyScore(query, ueName);
+              if (ueScore >= 0.5) {
+                const avgVal = ue.grade != null ? ue.grade : (ue.average != null ? ue.average : null);
+                results.push({
+                  type: 'mye-grade-ue',
+                  icon: '📊',
+                  title: `Moyenne UE : ${ueName}`,
+                  subtitle: `Semestre ${periodObj.period} (${periodObj.schoolYear}) • Coef: ${ue.coef || ue.ectsAttempted || 1}`,
+                  url: '/portal/student/grades',
+                  score: Math.min(ueScore + 0.15, 1.0), // Boosted priority for grades
+                  meta: { average: avgVal != null ? `${avgVal}/20` : 'Non noté' }
+                });
+              }
+
+              const subjects = ue.modules || ue.courses || ue.subjects || [];
+              if (Array.isArray(subjects)) {
+                subjects.forEach(sub => {
+                  const subName = sub.name || '';
+                  const subScore = fuzzyScore(query, subName);
+                  if (subScore >= 0.5) {
+                    const average = sub.grade != null ? sub.grade : (sub.average != null ? sub.average : null);
+                    results.push({
+                      type: 'mye-grade-subject',
+                      icon: '📚',
+                      title: subName,
+                      subtitle: `Matière dans l'UE : ${ueName} (${periodObj.period})`,
+                      url: '/portal/student/grades',
+                      score: Math.min(subScore + 0.15, 1.0), // Boosted priority for grades
+                      meta: { average: average != null ? `${average}/20` : 'Non noté' }
+                    });
+                  }
+                });
+              }
+            });
+          }
+        });
+      }
+
+      // B. Search Absences
+      if (focusSettings.myefrei && myefreiCache.absences.length > 0) {
+        let matchedAbs = [];
+        myefreiCache.absences.forEach(item => {
+          const courseName = item.moduleName || item.courseName || item.course || item.subject || 'Cours';
+          const score = Math.max(fuzzyScore(query, courseName), fuzzyScore(query, 'absence'), fuzzyScore(query, 'retard'));
+          if (score >= 0.5 || normQuery.includes('absence') || normQuery.includes('retard')) {
+            matchedAbs.push({ item, score });
+          }
+        });
+        matchedAbs.sort((a, b) => b.score - a.score);
+        matchedAbs.slice(0, 3).forEach(({ item, score }) => {
+          const isRetard = item.type === 'lateness' || item.type === 'late' || (item.label && item.label.toLowerCase().includes('retard'));
+          const justified = item.justified === true || item.status === 'excused' || item.status === 'justified';
+          const dateStr = item.startDateTime || item.date || item.start || '';
+          let formattedDate = 'Date inconnue';
+          if (dateStr) {
+            try {
+              formattedDate = new Date(dateStr).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+            } catch(e) {}
+          }
+          results.push({
+            type: 'mye-absence',
+            icon: isRetard ? '⏳' : '🛑',
+            title: `${isRetard ? 'Retard' : 'Absence'} : ${item.moduleName || item.courseName || item.course || item.subject || 'Cours'}`,
+            subtitle: `${formattedDate} • ${justified ? 'Excusé(e)' : 'Non excusé(e)'}`,
+            url: '/portal/student/absences',
+            score: normQuery.includes('absence') || normQuery.includes('retard') ? 0.95 : Math.min(score + 0.15, 1.0), // Boosted priority for absences
+            meta: { justified }
+          });
+        });
+      }
+
+      // C. Search Documents
+      if (focusSettings.myefrei && myefreiCache.documents.length > 0) {
+        myefreiCache.documents.forEach(doc => {
+          const score = fuzzyScore(query, doc.title || '');
+          if (score >= 0.5) {
+            let downloadUrl = `/api/rest/student/schooling/documents/${doc.id}/download`;
+            if (doc.source === 'invoice') downloadUrl = `/api/rest/student/schooling/invoices/${doc.id}/download`;
+            else if (doc.source === 'legacy') downloadUrl = `/api/rest/student/schooling/legacy-documents/${doc.id}/download`;
+
+            results.push({
+              type: 'mye-document',
+              icon: doc.source === 'invoice' ? '🧾' : '📄',
+              title: doc.title,
+              subtitle: `${doc.category || 'Scolarité'} • Téléchargement`,
+              url: downloadUrl,
+              score: Math.min(score + 0.15, 1.0), // Boosted priority for documents
+              isDownload: true
+            });
+          }
+        });
+      }
+
+      // D. Search Contacts
+      if (focusSettings.message && myefreiCache.contacts.length > 0) {
+        myefreiCache.contacts.forEach(cat => {
+          const catTitle = cat.title || '';
+          const contacts = cat.contacts || [];
+          contacts.forEach(c => {
+            const score = Math.max(fuzzyScore(query, c.title || ''), fuzzyScore(query, c.jobTitle || ''), fuzzyScore(query, catTitle) * 0.7);
+            if (score >= 0.5) {
+              results.push({
+                type: 'mye-contact',
+                icon: c.type === 'staff' ? '👤' : '🏢',
+                title: c.title,
+                subtitle: `${c.jobTitle || 'Service'} • ${catTitle}`,
+                url: c.link || '',
+                score: score * 0.7, // Reduced priority for contacts
+                meta: { email: c.email || '', phone: c.phone || '', azureId: c.azureId || '', isStaff: c.type === 'staff' }
+              });
+            }
+          });
+        });
+      }
+
+      // E. Search Resources
+      if (focusSettings.myefrei && myefreiCache.resources.length > 0) {
+        myefreiCache.resources.forEach(cat => {
+          cat.groups.forEach(group => {
+            group.items.forEach(resItem => {
+              const rTitle = resItem.title || resItem.name || '';
+              const score = Math.max(fuzzyScore(query, rTitle), fuzzyScore(query, resItem.description || '') * 0.7);
+              if (score >= 0.5) {
+                results.push({
+                  type: 'mye-resource',
+                  icon: '📁',
+                  title: rTitle,
+                  subtitle: `Ressources › ${cat.category} › ${group.name}`,
+                  url: `/api/rest/common/resources/${resItem._id}/file`,
+                  score: score * 0.65, // Reduced priority for resources
+                  isDownload: true
+                });
+              }
+            });
+          });
+        });
+      }
+
+      // F. Fallback Search Moodle if config present
+      if (focusSettings.moodle) {
+        try {
+          const storage = await new Promise(resolve => {
+            chrome.storage.local.get(['moodle_sesskey', 'moodle_userid'], resolve);
+          });
+          if (storage && storage.moodle_sesskey && storage.moodle_userid) {
+            const moodleResults = await deepSearchMoodleCrossPlatform(query, storage.moodle_sesskey, parseInt(storage.moodle_userid, 10));
+            results.push(...moodleResults.map(r => ({ ...r, score: r.score * 0.85 })));
+          }
+        } catch (e) {
+          console.warn('[IA Search] Cross Moodle failed:', e);
+        }
+      }
+
+      const seen = new Set();
+      return results
+        .filter(r => {
+          const key = `${r.type}-${r.title}-${r.url}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 6);
+    };
+
+    // ── MyEfrei Render results HTML ──────────────────────────────────────────
+    const myeRenderResults = (results, query) => {
+      const normQuery = normalizeStr(query);
+      let aiSummaryHTML = '';
+
+      if (focusSettings.myefrei) {
+        const hasNotesKeyword = normQuery.includes('note') || normQuery.includes('grade') || normQuery.includes('moyenne') || normQuery.includes('bulletin') || normQuery.includes('resultat');
+        const hasAbsenceKeyword = normQuery.includes('absence') || normQuery.includes('absent') || normQuery.includes('retard') || normQuery.includes('manqu') || normQuery.includes('justif');
+        const hasDocsKeyword = normQuery.includes('document') || normQuery.includes('facture') || normQuery.includes('attestation') || normQuery.includes('justificatif') || normQuery.includes('schooling') || normQuery.includes('legacy');
+        const hasContactsKeyword = normQuery.includes('contact') || normQuery.includes('prof') || normQuery.includes('enseignant') || normQuery.includes('scolarite') || normQuery.includes('administration') || normQuery.includes('mail') || normQuery.includes('telephone');
+        const hasResourcesKeyword = normQuery.includes('ressource') || normQuery.includes('wifi') || normQuery.includes('logiciel') || normQuery.includes('outils') || normQuery.includes('bibliotheque') || normQuery.includes('lien') || normQuery.includes('utile');
+        const hasMoodleKeyword = normQuery.includes('moodle') || normQuery.includes('devoir') || normQuery.includes('deadline') || normQuery.includes('echeance') || normQuery.includes('travail') || normQuery.includes('cours');
+
+        if (hasNotesKeyword) {
+          let notesText = "";
+          let bestSubjectMatch = null;
+          let bestSubjectScore = 0.5;
+
+          const detectSemesterInQuery = (q) => {
+            const m = q.match(/\bsemestres?\s*(\d+)\b/i) || q.match(/\bs\s*(\d+)\b/i);
+            return m ? m[1] : null;
+          };
+
+          const cleanSubjectQuery = (q) => {
+            return q
+              .replace(/\b(notes?|grades?|moyennes?|bulletins?|resultats?|evaluations?|devoirs?|controles?|examens?|evals?|donne|moi|ma|mon|mes|le|la|les|du|de|un|une|generale|g|semestres?|s\d+)\b/g, '')
+              .replace(/\b(au|aux|en|dans|de|du|d')\b/g, '')
+              .replace(/\d+/g, '')
+              .replace(/\s+/g, ' ')
+              .trim();
+          };
+
+          const targetSem = detectSemesterInQuery(normQuery);
+          const periodsToSearch = targetSem 
+            ? myefreiCache.grades.filter(g => {
+                const pStr = String(g.period).toLowerCase();
+                return pStr === targetSem || pStr === `s${targetSem}` || pStr.includes(`s${targetSem}`) || pStr.includes(targetSem);
+              })
+            : myefreiCache.grades;
+
+          const strippedQuery = cleanSubjectQuery(normQuery);
+
+          if (strippedQuery.length > 2) {
+            periodsToSearch.forEach(periodObj => {
+              const ues = periodObj.data && (periodObj.data.ues || (Array.isArray(periodObj.data) ? periodObj.data : (periodObj.data.grades && periodObj.data.grades.ues)));
+              if (Array.isArray(ues)) {
+                ues.forEach(ue => {
+                  const ueName = ue.name || '';
+                  const ueScore = fuzzyScore(strippedQuery, ueName);
+                  const ueGrade = ue.grade != null ? ue.grade : (ue.average != null ? ue.average : null);
+                  
+                  if (ueScore >= bestSubjectScore && ueGrade != null) {
+                    bestSubjectScore = ueScore;
+                    bestSubjectMatch = { name: ueName, grade: ueGrade };
+                  }
+
+                  const subjects = ue.modules || ue.subjects || ue.courses || [];
+                  if (Array.isArray(subjects)) {
+                    subjects.forEach(sub => {
+                      const subName = sub.name || '';
+                      const subScore = fuzzyScore(strippedQuery, subName);
+                      const subGrade = sub.grade != null ? sub.grade : (sub.average != null ? sub.average : null);
+                      
+                      if (subScore >= bestSubjectScore && subGrade != null) {
+                        bestSubjectScore = subScore;
+                        bestSubjectMatch = { name: subName, grade: subGrade };
+                      }
+                    });
+                  }
+                });
+              }
+            });
+          }
+
+          if (bestSubjectMatch) {
+            notesText = `Vous avez eu <strong>${bestSubjectMatch.grade}</strong> en <strong>${bestSubjectMatch.name}</strong>.`;
+          } else {
+            const sortedGrades = [...periodsToSearch].sort((a, b) => {
+              if (a.schoolYear !== b.schoolYear) {
+                return b.schoolYear.localeCompare(a.schoolYear);
+              }
+              return b.period.localeCompare(a.period);
+            });
+            const latestPeriod = sortedGrades[0];
+
+            if (latestPeriod) {
+              let generalAverage = null;
+              if (latestPeriod.data) {
+                const d = latestPeriod.data;
+                if (d.average != null) generalAverage = d.average;
+                else if (d.generalAverage != null) generalAverage = d.generalAverage;
+                else if (d.grades) {
+                  if (d.grades.average != null) generalAverage = d.grades.average;
+                  else if (d.grades.generalAverage != null) generalAverage = d.grades.generalAverage;
+                }
+              }
+
+              const ues = latestPeriod.data && (latestPeriod.data.ues || (Array.isArray(latestPeriod.data) ? latestPeriod.data : (latestPeriod.data.grades && latestPeriod.data.grades.ues)));
+              
+              if (generalAverage == null && Array.isArray(ues)) {
+                let sum = 0;
+                let count = 0;
+                ues.forEach(ue => {
+                  const ueGrade = ue.grade != null ? ue.grade : (ue.average != null ? ue.average : null);
+                  if (ueGrade != null) {
+                    sum += ueGrade;
+                    count++;
+                  }
+                });
+                if (count > 0) {
+                  generalAverage = sum / count;
+                }
+              }
+
+              const modulesList = [];
+              if (Array.isArray(ues)) {
+                ues.forEach(ue => {
+                  const subjects = ue.modules || ue.subjects || ue.courses || [];
+                  if (Array.isArray(subjects) && subjects.length > 0) {
+                    subjects.forEach(sub => {
+                      const subGrade = sub.grade != null ? sub.grade : (sub.average != null ? sub.average : null);
+                      if (subGrade != null) {
+                        modulesList.push({ name: sub.name, grade: subGrade });
+                      }
+                    });
+                  } else {
+                    const ueGrade = ue.grade != null ? ue.grade : (ue.average != null ? ue.average : null);
+                    if (ueGrade != null) {
+                      modulesList.push({ name: ue.name, grade: ueGrade });
+                    }
+                  }
+                });
+              }
+
+              let avgStr = generalAverage != null ? `<strong>${Number(generalAverage).toFixed(2)}</strong>` : "non spécifiée";
+              notesText = `Votre moyenne générale est de ${avgStr}.`;
+              
+              if (modulesList.length > 0) {
+                notesText += `<br><br>Voici vos moyennes par module :`;
+                notesText += `<div style="margin-top: 10px; display: flex; flex-direction: column; gap: 4px;">`;
+                modulesList.forEach(m => {
+                  notesText += `
+                    <div class="mye-ai-summary-module-row">
+                      <span style="font-weight: 500;">${m.name}</span>
+                      <strong>${Number(m.grade).toFixed(2)}</strong>
+                    </div>
+                  `;
+                });
+                notesText += `</div>`;
+              }
+            } else {
+              notesText = targetSem ? `Aucune note enregistrée pour le semestre ${targetSem}.` : "Vous n'avez pas encore de notes enregistrées.";
+            }
+          }
+          
+          aiSummaryHTML = `
+            <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <span style="font-size: 20px;">🤖</span>
+                <strong style="color: #4f46e5; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Assistant IA</strong>
+              </div>
+              <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
+                ${notesText}
+              </div>
+            </div>
+          `;
+        } 
+        else if (hasAbsenceKeyword) {
+          let absencesCount = 0;
+          let latenessesCount = 0;
+          let unjustifiedAbsences = [];
+
+          myefreiCache.absences.forEach(item => {
+            const isRetard = item.type === 'lateness' || item.type === 'late' || (item.label && item.label.toLowerCase().includes('retard'));
+            if (isRetard) {
+              latenessesCount++;
+            } else {
+              absencesCount++;
+            }
+            const justified = item.justified === true || item.status === 'excused' || item.status === 'justified';
+            if (!justified) {
+              unjustifiedAbsences.push(item);
+            }
+          });
+
+          let absencesText = `Vous avez <strong>${absencesCount}</strong> absences et <strong>${latenessesCount}</strong> retards.`;
+
+          if (unjustifiedAbsences.length > 0) {
+            unjustifiedAbsences.sort((a, b) => new Date(a.startDateTime) - new Date(b.startDateTime));
+            const urgent = unjustifiedAbsences[0];
+            const start = new Date(urgent.startDateTime);
+            const limit = urgent.limitDate ? new Date(urgent.limitDate) : new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000);
+            const now = new Date();
+            const diffTime = limit.getTime() - now.getTime();
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            
+            const formattedStart = start.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+            const formattedLimit = limit.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+            
+            if (diffDays > 0) {
+              absencesText += ` Vous devez justifier votre absence du <strong>${formattedStart}</strong> avant le <strong>${formattedLimit}</strong>, il reste <strong>${diffDays}</strong> jour${diffDays !== 1 ? 's' : ''}.`;
+            }
+          }
+
+          aiSummaryHTML = `
+            <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <span style="font-size: 20px;">🤖</span>
+                <strong style="color: #4f46e5; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Assistant IA</strong>
+              </div>
+              <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
+                ${absencesText}
+              </div>
+            </div>
+          `;
+        }
+        else if (hasMoodleKeyword) {
+          let moodleText = "";
+          const deadlines = results.filter(r => r.type === 'deadline');
+          const courses = results.filter(r => r.type === 'course');
+
+          if (deadlines.length > 0) {
+            moodleText = `Vous avez <strong>${deadlines.length}</strong> devoir${deadlines.length > 1 ? 's' : ''}/échéance${deadlines.length > 1 ? 's' : ''} à venir sur Moodle.`;
+            moodleText += `<br><br>Voici vos prochaines échéances :`;
+            moodleText += `<div style="margin-top: 10px; display: flex; flex-direction: column; gap: 4px;">`;
+            deadlines.slice(0, 3).forEach(dl => {
+              moodleText += `
+                <div class="mye-ai-summary-module-row">
+                  <span style="font-weight: 500;">${dl.title}</span>
+                  <a href="${dl.url}" target="_blank" style="color: #4f46e5; text-decoration: none; font-size: 13px; font-weight: 600;">Voir</a>
+                </div>
+              `;
+            });
+            moodleText += `</div>`;
+          } else if (courses.length > 0) {
+            moodleText = `Voici vos cours Moodle correspondants :`;
+            moodleText += `<div style="margin-top: 10px; display: flex; flex-direction: column; gap: 4px;">`;
+            courses.slice(0, 3).forEach(c => {
+              moodleText += `
+                <div class="mye-ai-summary-module-row">
+                  <span style="font-weight: 500;">${c.title}</span>
+                  <a href="${c.url}" target="_blank" style="color: #4f46e5; text-decoration: none; font-size: 13px; font-weight: 600;">Accéder</a>
+                </div>
+              `;
+            });
+            moodleText += `</div>`;
+          } else {
+            moodleText = "Aucune échéance ou cours Moodle particulier trouvé pour cette recherche.";
+          }
+
+          aiSummaryHTML = `
+            <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <span style="font-size: 20px;">🤖</span>
+                <strong style="color: #4f46e5; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Assistant IA</strong>
+              </div>
+              <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
+                ${moodleText}
+              </div>
+            </div>
+          `;
+        }
+        else if (hasDocsKeyword) {
+          let docsText = `Vous avez <strong>${myefreiCache.documents.length}</strong> document${myefreiCache.documents.length > 1 ? 's' : ''} administratif${myefreiCache.documents.length > 1 ? 's' : ''} disponible${myefreiCache.documents.length > 1 ? 's' : ''} dans votre espace.`;
+          
+          if (myefreiCache.documents.length > 0) {
+            docsText += `<br><br>Voici vos documents récents :`;
+            docsText += `<div style="margin-top: 10px; display: flex; flex-direction: column; gap: 4px;">`;
+            myefreiCache.documents.slice(0, 3).forEach(doc => {
+              let downloadUrl = `/api/rest/student/schooling/documents/${doc.id}/download`;
+              if (doc.source === 'invoice') downloadUrl = `/api/rest/student/schooling/invoices/${doc.id}/download`;
+              else if (doc.source === 'legacy') downloadUrl = `/api/rest/student/schooling/legacy-documents/${doc.id}/download`;
+
+              docsText += `
+                <div class="mye-ai-summary-module-row">
+                  <span style="font-weight: 500;">${doc.title}</span>
+                  <a href="${downloadUrl}" target="_blank" style="color: #4f46e5; text-decoration: none; font-size: 13px; font-weight: 600;">Télécharger</a>
+                </div>
+              `;
+            });
+            docsText += `</div>`;
+          }
+
+          aiSummaryHTML = `
+            <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <span style="font-size: 20px;">🤖</span>
+                <strong style="color: #4f46e5; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Assistant IA</strong>
+              </div>
+              <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
+                ${docsText}
+              </div>
+            </div>
+          `;
+        }
+        else if (hasContactsKeyword) {
+          let contactsText = "Voici les contacts administratifs et enseignants disponibles :";
+          let contactsList = [];
+
+          myefreiCache.contacts.forEach(cat => {
+            const catTitle = cat.title || '';
+            const contacts = cat.contacts || [];
+            contacts.forEach(c => {
+              if (contactsList.length < 3) {
+                contactsList.push({ name: c.title, detail: `${c.jobTitle || 'Service'} (${catTitle})`, email: c.email });
+              }
+            });
+          });
+
+          if (contactsList.length > 0) {
+            contactsText += `<div style="margin-top: 10px; display: flex; flex-direction: column; gap: 4px;">`;
+            contactsList.forEach(c => {
+              contactsText += `
+                <div class="mye-ai-summary-module-row">
+                  <div style="display: flex; flex-direction: column;">
+                    <span style="font-weight: 500;">${c.name}</span>
+                    <span style="font-size: 12px; color: #64748b; margin-top: 2px;">${c.detail}</span>
+                  </div>
+                  ${c.email ? `<a href="mailto:${c.email}" style="color: #4f46e5; text-decoration: none; font-size: 13px; font-weight: 600;">E-mail</a>` : ''}
+                </div>
+              `;
+            });
+            contactsText += `</div>`;
+          } else {
+            contactsText = "Aucun contact enregistré trouvé.";
+          }
+
+          aiSummaryHTML = `
+            <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <span style="font-size: 20px;">🤖</span>
+                <strong style="color: #4f46e5; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Assistant IA</strong>
+              </div>
+              <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
+                ${contactsText}
+              </div>
+            </div>
+          `;
+        }
+        else if (hasResourcesKeyword) {
+          let resourcesText = "Voici les ressources utiles disponibles sur le portail :";
+          let resourcesList = [];
+
+          myefreiCache.resources.forEach(cat => {
+            const catName = cat.category || cat.title || 'Ressources';
+            const groups = cat.groups || [];
+            groups.forEach(group => {
+              const items = group.items || [];
+              items.forEach(resItem => {
+                if (resourcesList.length < 3) {
+                  resourcesList.push({
+                    name: resItem.title || resItem.name || 'Fichier',
+                    detail: `${catName} › ${group.name}`,
+                    url: `/api/rest/common/resources/${resItem._id}/file`
+                  });
+                }
+              });
+            });
+          });
+
+          if (resourcesList.length > 0) {
+            resourcesText += `<div style="margin-top: 10px; display: flex; flex-direction: column; gap: 4px;">`;
+            resourcesList.forEach(r => {
+              resourcesText += `
+                <div class="mye-ai-summary-module-row">
+                  <div style="display: flex; flex-direction: column;">
+                    <span style="font-weight: 500;">${r.name}</span>
+                    <span style="font-size: 12px; color: #64748b; margin-top: 2px;">${r.detail}</span>
+                  </div>
+                  <a href="${r.url}" target="_blank" download style="color: #4f46e5; text-decoration: none; font-size: 13px; font-weight: 600;">Télécharger</a>
+                </div>
+              `;
+            });
+            resourcesText += `</div>`;
+          } else {
+            resourcesText = "Aucune ressource utile enregistrée.";
+          }
+
+          aiSummaryHTML = `
+            <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <span style="font-size: 20px;">🤖</span>
+                <strong style="color: #4f46e5; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Assistant IA</strong>
+              </div>
+              <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
+                ${resourcesText}
+              </div>
+            </div>
+          `;
+        }
+      }
+
+      if (results.length === 0 && !aiSummaryHTML) {
+        return `<div class="ia-no-results">😕 Je n'ai trouvé aucun résultat correspondant dans MyEfrei ou Moodle.</div>`;
+      }
+
+      const typeLabel = {
+        'mye-grade-ue': 'Moyenne UE',
+        'mye-grade-subject': 'Matière',
+        'mye-absence': 'Absence/Retard',
+        'mye-document': 'Document',
+        'mye-contact': 'Contact',
+        'mye-resource': 'Ressources',
+        'course': 'Cours Moodle',
+        'deadline': 'Deadline Moodle',
+        'file': 'Fichier Moodle'
+      };
+
+      let html = '';
+      if (results.length > 0) {
+        html += `<div class="ia-results-header" style="font-size: 16px; font-weight: 700; color: #475569; margin-bottom: 16px;">${results.length} résultat${results.length > 1 ? 's' : ''} trouvé${results.length > 1 ? 's' : ''} pour <strong>"${query}"</strong></div>`;
+      }
+      
+      html += aiSummaryHTML;
+      
+      if (results.length > 0) {
+        html += `<div class="ia-results-list">`;
+        for (const r of results) {
+          const pct = Math.round(Math.min(r.score, 1) * 100);
+          const label = typeLabel[r.type] || r.type;
+          
+          let extraHTML = '';
+          let cardHref = r.url;
+
+          // Custom render logic based on types
+          if (r.type === 'mye-grade-ue' || r.type === 'mye-grade-subject') {
+            const avg = r.meta && r.meta.average;
+            let color = '#2ecc71';
+            if (avg && avg !== 'Non noté') {
+              const parsed = parseFloat(avg);
+              if (!isNaN(parsed) && parsed < 10) color = '#e74c3c';
+              else if (!isNaN(parsed) && parsed < 12) color = '#f39c12';
+            }
+            extraHTML = `<div class="mye-ai-grade-badge" style="background-color: ${color}; color: white; padding: 4px 8px; border-radius: 6px; font-weight: 700; font-size: 14px; margin-left: auto;">${avg}</div>`;
+          } 
+          else if (r.type === 'mye-contact') {
+            const c = r.meta || {};
+            let actions = '';
+            if (c.email) {
+              actions += `<a href="mailto:${c.email}" class="mye-ai-contact-btn" title="Envoyer un e-mail" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: #e2e8f0; color: #475569; margin-left: 5px;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg></a>`;
+              if (c.isStaff) {
+                actions += `<a href="https://teams.microsoft.com/l/chat/0/0?users=${encodeURIComponent(c.email)}" target="_blank" class="mye-ai-contact-btn" title="Discuter sur Teams" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: #e0e7ff; color: #4f46e5; margin-left: 5px;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></a>`;
+              }
+            }
+            if (c.phone) {
+              actions += `<a href="tel:${c.phone}" class="mye-ai-contact-btn" title="Téléphoner" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: #ecfdf5; color: #059669; margin-left: 5px;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg></a>`;
+            }
+            extraHTML = `<div style="display: flex; align-items: center; margin-left: auto;">${actions}</div>`;
+          }
+
+          const isDownload = r.isDownload || false;
+
+          html += `<a href="${cardHref}" target="_blank" class="ia-result-card mye-portal-result" ${isDownload ? 'download' : ''} style="display: flex !important; align-items: center; padding: 16px; border-radius: 16px; border: 1px solid rgba(0, 0, 0, 0.05); background: white; margin-bottom: 12px; text-decoration: none; color: inherit; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02) !important;">
+            <div class="ia-result-icon" style="font-size: 24px; margin-right: 16px; width: 44px; height: 44px; border-radius: 12px; background: #f1f5f9; display: flex; align-items: center; justify-content: center;">${r.icon}</div>
+            <div class="ia-result-body" style="flex: 1; display: flex; flex-direction: column;">
+              <div class="ia-result-title" style="font-weight: 700; font-size: 15px; color: #1e293b;">${r.title}</div>
+              <div class="ia-result-subtitle" style="font-size: 12.5px; color: #64748b; margin-top: 3px;">${r.subtitle}</div>
+              <div class="ia-result-meta" style="margin-top: 6px; display: flex; align-items: center; gap: 8px;">
+                <span class="ia-result-type" style="font-size: 10px; font-weight: 700; color: #6366f1; background: #e0e7ff; padding: 2px 6px; border-radius: 4px;">${label}</span>
+                <span class="ia-result-score" style="font-size: 11px; color: #94a3b8;">${pct}% match</span>
+              </div>
+            </div>
+            ${extraHTML}
+            <div class="ia-result-arrow" style="margin-left: 16px; color: #94a3b8;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg></div>
+          </a>`;
+        }
+        html += '</div>';
+      }
+
+      return html;
+    };
+
+    // ── Helper to setup UI events on Portal chatbot ─────────────────────────
+    const attachPortalChatEvents = () => {
+      // Toggle switches
+      const toggleMyefrei = document.getElementById('mye-toggle-myefrei');
+      const toggleMoodle = document.getElementById('mye-toggle-moodle');
+      const toggleMessage = document.getElementById('mye-toggle-message');
+
+      const saveSettings = () => {
+        focusSettings.myefrei = toggleMyefrei.checked;
+        focusSettings.moodle = toggleMoodle.checked;
+        focusSettings.message = toggleMessage.checked;
+        chrome.storage.local.set({
+          focus_myefrei: focusSettings.myefrei,
+          focus_moodle: focusSettings.moodle,
+          focus_message: focusSettings.message
+        });
+
+        // Trigger dynamic API call if toggled ON, or clear cache if toggled OFF!
+        if (focusSettings.myefrei) {
+          preloadMyEfrei();
+        } else {
+          myefreiCache.periods = [];
+          myefreiCache.grades = [];
+          myefreiCache.absences = [];
+          myefreiCache.documents = [];
+          myefreiCache.resources = [];
+          myefreiCache.myefreiLoaded = false;
+          myefreiCache.myefreiLoading = false;
+        }
+
+        if (focusSettings.message) {
+          preloadMessage();
+        } else {
+          myefreiCache.contacts = [];
+          myefreiCache.messageLoaded = false;
+          myefreiCache.messageLoading = false;
+        }
+      };
+
+      if (toggleMyefrei) toggleMyefrei.addEventListener('change', saveSettings);
+      if (toggleMoodle) toggleMoodle.addEventListener('change', saveSettings);
+      if (toggleMessage) toggleMessage.addEventListener('change', saveSettings);
+
+      // Exit button
+      const exitBtn = document.getElementById('mye-ai-exit-btn');
+      if (exitBtn) {
+        exitBtn.addEventListener('click', () => {
+          window.location.href = '/portal/student/home';
+        });
+      }
+
+      // Search input
+      const mainInput = document.getElementById('mye-ai-search-input');
+      const mainSubmit = document.getElementById('mye-ai-search-submit');
+      const backBtn = document.getElementById('mye-ai-back-btn');
+
+      const executeSearch = async (text) => {
+        if (!text.trim()) return;
+        
+        const isLandingVisible = !document.getElementById('mye-ai-landing').classList.contains('mye-hidden');
+        
+        if (isLandingVisible) {
+          document.getElementById('mye-ai-landing').classList.add('mye-hidden');
+          document.getElementById('mye-ai-results-panel').classList.remove('mye-hidden');
+          const scrollable = document.getElementById('mye-ai-results-scrollable');
+          if (scrollable) scrollable.innerHTML = '';
+        }
+        
+        appendUserMessage(text);
+        showPortalLoading();
+        
+        mainInput.value = '';
+        mainInput.focus();
+
+        try {
+          const results = await searchMyEfreiAndMoodle(text);
+          renderPortalResults(results, text);
+        } catch(e) {
+          renderPortalError(e.message);
+        }
+      };
+
+      if (mainSubmit) mainSubmit.addEventListener('click', () => executeSearch(mainInput.value));
+      if (mainInput) mainInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') executeSearch(mainInput.value); });
+
+      if (backBtn) {
+        backBtn.addEventListener('click', () => {
+          document.getElementById('mye-ai-results-panel').classList.add('mye-hidden');
+          document.getElementById('mye-ai-landing').classList.remove('mye-hidden');
+          mainInput.value = '';
+          mainInput.focus();
+        });
+      }
+
+      // Quick links
+      document.querySelectorAll('.mye-ai-link-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const query = btn.getAttribute('data-query');
+          executeSearch(query);
+        });
+      });
+    };
+
+    const escapeHtml = (unsafe) => {
+      return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    };
+
+    const appendUserMessage = (text) => {
+      const scrollable = document.getElementById('mye-ai-results-scrollable');
+      if (scrollable) {
+        const userRow = document.createElement('div');
+        userRow.className = 'mye-chat-row-user';
+        userRow.innerHTML = `
+          <div class="mye-chat-bubble-user">
+            ${escapeHtml(text)}
+          </div>
+        `;
+        scrollable.appendChild(userRow);
+        scrollable.scrollTop = scrollable.scrollHeight;
+      }
+    };
+
+    const showPortalLoading = () => {
+      const scrollable = document.getElementById('mye-ai-results-scrollable');
+      if (scrollable) {
+        // Remove old temp loading row if it exists
+        const oldTemp = document.getElementById('mye-chat-loading-temp');
+        if (oldTemp) oldTemp.remove();
+
+        const loadingRow = document.createElement('div');
+        loadingRow.className = 'mye-chat-row-bot';
+        loadingRow.id = 'mye-chat-loading-temp';
+        loadingRow.innerHTML = `
+          <div class="mye-chat-bot-header">
+            <span class="mye-chat-bot-avatar">🤖</span>
+            <span class="mye-chat-bot-name">Assistant IA</span>
+          </div>
+          <div class="mye-chat-bot-content">
+            <div class="ia-typing" style="padding: 12px 16px; width: fit-content;">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+        `;
+        scrollable.appendChild(loadingRow);
+        scrollable.scrollTop = scrollable.scrollHeight;
+      }
+    };
+
+    const renderPortalResults = (results, query) => {
+      const scrollable = document.getElementById('mye-ai-results-scrollable');
+      if (scrollable) {
+        const tempLoading = document.getElementById('mye-chat-loading-temp');
+        if (tempLoading) tempLoading.remove();
+
+        const botHtml = myeRenderResults(results, query);
+        const botRow = document.createElement('div');
+        botRow.className = 'mye-chat-row-bot';
+        botRow.innerHTML = `
+          <div class="mye-chat-bot-header">
+            <span class="mye-chat-bot-avatar">🤖</span>
+            <span class="mye-chat-bot-name">Assistant IA</span>
+          </div>
+          <div class="mye-chat-bot-content">
+            ${botHtml}
+          </div>
+        `;
+        scrollable.appendChild(botRow);
+        
+        scrollable.scrollTop = scrollable.scrollHeight;
+        requestAnimationFrame(() => {
+          scrollable.scrollTop = scrollable.scrollHeight;
+        });
+      }
+    };
+
+    const renderPortalError = (msg) => {
+      const scrollable = document.getElementById('mye-ai-results-scrollable');
+      if (scrollable) {
+        const tempLoading = document.getElementById('mye-chat-loading-temp');
+        if (tempLoading) tempLoading.remove();
+
+        const botRow = document.createElement('div');
+        botRow.className = 'mye-chat-row-bot';
+        botRow.innerHTML = `
+          <div class="mye-chat-bot-header">
+            <span class="mye-chat-bot-avatar">🤖</span>
+            <span class="mye-chat-bot-name">Assistant IA</span>
+          </div>
+          <div class="mye-chat-bot-content">
+            <div style="padding: 20px; text-align: center; color: #ef4444; font-weight: 600; background: rgba(239, 68, 68, 0.05); border-radius: 16px; border: 1px solid rgba(239, 68, 68, 0.1);">
+              ❌ Une erreur est survenue : <em>${msg}</em>
+            </div>
+          </div>
+        `;
+        scrollable.appendChild(botRow);
+        scrollable.scrollTop = scrollable.scrollHeight;
+      }
+    };
+
+    // ── Inject the full page Chat UI container ───────────────────────────────
+    const injectPortalChatUI = () => {
+      if (document.getElementById('mye-ai-container')) return;
+
+      const container = document.createElement('div');
+      container.id = 'mye-ai-container';
+      container.className = 'mye-page-container';
+      
+      const logoUrl = chrome.runtime.getURL('img/logoMyHub.png');
+      const myefreiLogoUrl = chrome.runtime.getURL('img/logomyEfreiUltra.png');
+      const moodleLogoUrl = chrome.runtime.getURL('img/logoMyMoodleUltra.png');
+      const messageLogoUrl = chrome.runtime.getURL('img/Message.png');
+
+      container.innerHTML = `
+        <div class="mye-ai-main-layout">
+          <div class="mye-ai-left-sidebar">
+            <div class="mye-ai-brand-card">
+              <img src="${logoUrl}" class="mye-ai-brand-logo" alt="myHub logo">
+              <span class="mye-ai-brand-name">myHub ULTRA</span>
+            </div>
+            
+            <div class="mye-focus-cards">
+              <!-- Focus myEfrei -->
+              <div class="mye-focus-card mye-focus-myefrei">
+                <div class="mye-focus-icon-circle">
+                  <img src="${myefreiLogoUrl}" class="mye-focus-icon-img" alt="myEfrei">
+                </div>
+                <div class="mye-focus-card-body">
+                  <span class="mye-focus-title">Focus myEfrei</span>
+                  <label class="mye-ai-switch">
+                    <input type="checkbox" id="mye-toggle-myefrei" ${focusSettings.myefrei ? 'checked' : ''}>
+                    <span class="mye-ai-slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Focus Moodle -->
+              <div class="mye-focus-card mye-focus-moodle">
+                <div class="mye-focus-icon-circle">
+                  <img src="${moodleLogoUrl}" class="mye-focus-icon-img" alt="Moodle">
+                </div>
+                <div class="mye-focus-card-body">
+                  <span class="mye-focus-title">Focus Moodle</span>
+                  <label class="mye-ai-switch">
+                    <input type="checkbox" id="mye-toggle-moodle" ${focusSettings.moodle ? 'checked' : ''}>
+                    <span class="mye-ai-slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Focus Message -->
+              <div class="mye-focus-card mye-focus-message">
+                <div class="mye-focus-icon-circle">
+                  <img src="${messageLogoUrl}" class="mye-focus-icon-img" alt="Message">
+                </div>
+                <div class="mye-focus-card-body">
+                  <span class="mye-focus-title">Focus Message</span>
+                  <label class="mye-ai-switch">
+                    <input type="checkbox" id="mye-toggle-message" ${focusSettings.message ? 'checked' : ''}>
+                    <span class="mye-ai-slider"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+            
+            <button id="mye-ai-exit-btn" class="mye-ai-exit-btn">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+              <span>Retour sur myEfrei</span>
+            </button>
+          </div>
+
+          <div class="mye-ai-right-content">
+            <div class="mye-ai-center-view">
+              <div class="mye-ai-landing" id="mye-ai-landing">
+                <h1 class="mye-ai-landing-title">BONJOUR</h1>
+                <h2 class="mye-ai-landing-subtitle">Que cherchez vous ?</h2>
+                
+                <div class="mye-ai-quick-links">
+                  <button class="mye-ai-link-btn" data-query="actualités">Actualité</button>
+                  <button class="mye-ai-link-btn" data-query="mes cours">Mes cours</button>
+                  <button class="mye-ai-link-btn" data-query="contacts scolarité">Envoyer un DM</button>
+                </div>
+              </div>
+
+              <!-- Dynamic search results viewport -->
+              <div class="mye-ai-results-panel mye-hidden" id="mye-ai-results-panel">
+                <div class="mye-ai-results-header-row">
+                  <button id="mye-ai-back-btn" class="mye-ai-back-btn" title="Retour à l'accueil">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+                    <span>Retour</span>
+                  </button>
+                </div>
+                <div class="mye-ai-results-scrollable" id="mye-ai-results-scrollable">
+                  <!-- Result cards rendered here -->
+                </div>
+              </div>
+            </div>
+
+            <!-- ChatGPT style Bottom search input -->
+            <div class="mye-ai-bottom-container">
+              <div class="mye-ai-search-box">
+                <input type="text" id="mye-ai-search-input" placeholder="Chercher dans l'univers de l'Efrei">
+                <button id="mye-ai-search-submit" title="Rechercher">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(container);
+
+      // Attach events
+      attachPortalChatEvents();
+
+      // Launch background preloading if enabled
+      if (focusSettings.myefrei) preloadMyEfrei();
+      if (focusSettings.message) preloadMessage();
+    };
+
+    const cleanupPortalChatUI = () => {
+      const container = document.getElementById('mye-ai-container');
+      if (container) container.remove();
+    };
+
+    // Route checker for MyEfrei SPA
+    const checkPortalRoute = () => {
+      const isOnAiPage = window.location.pathname.includes('/racywama/ai');
+      if (isOnAiPage) {
+        document.body.classList.add('mye-clean-screen');
+        document.body.classList.add('mye-ai-page');
+        injectPortalChatUI();
+      } else {
+        cleanupPortalChatUI();
+        document.body.classList.remove('mye-ai-page');
+      }
+    };
+
+    // Watch history changes
+    let lastUrl = window.location.href;
+    setInterval(() => {
+      if (lastUrl !== window.location.href) {
+        lastUrl = window.location.href;
+        checkPortalRoute();
+      }
+    }, 300);
+
+    // Watch popstate
+    window.addEventListener('popstate', checkPortalRoute);
+
+    // Initial check after loading settings
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        chrome.storage.local.get(['focus_myefrei', 'focus_moodle', 'focus_message'], (res) => {
+          focusSettings.myefrei = res.focus_myefrei !== false;
+          focusSettings.moodle = res.focus_moodle !== false;
+          focusSettings.message = res.focus_message !== false;
+          checkPortalRoute();
+        });
+      });
+    } else {
+      chrome.storage.local.get(['focus_myefrei', 'focus_moodle', 'focus_message'], (res) => {
+        focusSettings.myefrei = res.focus_myefrei !== false;
+        focusSettings.moodle = res.focus_moodle !== false;
+        focusSettings.message = res.focus_message !== false;
+        checkPortalRoute();
+      });
     }
-  };
-
-  window.addEventListener('ultramoodle-ai-selected', () => {
-    renderAiChat();
-    setAiSuggestions(['Mes devoirs', 'Mes quiz', 'Mes deadlines']);
-  });
-
-  window.addEventListener('ultramoodle-ai-send-message', async (e) => {
-    const text = e.detail && e.detail.text;
-    if (!text) return;
-    const inputField = document.querySelector('.oneui-input-field');
-    if (inputField) { inputField.value = ''; inputField.style.height = 'auto'; }
-    await handleAiChatMessage(text);
-  });
-
-  // NEW: Wait for the entire window to load before extracting the config
-  window.addEventListener('load', extractMoodleConfig);
+  }
 
 })();

@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+
 /* ═══════════════════════════════════════════════════════════════════════
    IA MOODLE SEARCH CHATBOT — Overlay & Panel
    ═══════════════════════════════════════════════════════════════════════ */
@@ -579,3 +581,707 @@
   background: rgba(234, 67, 53, 0.15) !important;
   color: #f89890 !important;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   MYEFREI PORTAL CHAT PAGE (/racywama/ai)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Hide custom blue header wrapper only on AI page */
+body.mye-ai-page #mye-custom-header-wrapper {
+  display: none !important;
+}
+
+#mye-ai-container {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background-color: #F0F0F0 !important;
+  box-sizing: border-box !important;
+  font-family: 'Outfit', 'Segoe UI', system-ui, sans-serif !important;
+  color: #000000 !important;
+  z-index: 100000 !important;
+  overflow: hidden !important;
+}
+
+#mye-ai-container,
+#mye-ai-container * {
+  font-family: 'Outfit', 'Segoe UI', system-ui, sans-serif !important;
+}
+
+/* Dark mode compatibility for main page container */
+.ultramoodle-dark #mye-ai-container {
+  background-color: #121212 !important;
+  color: #ffffff !important;
+}
+
+
+
+.mye-ai-main-layout {
+  display: flex !important;
+  flex: 1 !important;
+  padding: 24px !important;
+  gap: 24px !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+}
+
+/* Sidebar styling containing separate rounded floating cards */
+.mye-ai-left-sidebar {
+  width: 250px !important;
+  min-width: 250px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 16px !important;
+  height: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.mye-ai-right-content {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  box-sizing: border-box !important;
+  height: 100% !important;
+  overflow: hidden !important;
+}
+
+.mye-ai-center-view {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  min-height: 0 !important;
+}
+
+.mye-ai-bottom-container {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  padding: 16px 40px 24px 40px !important;
+  flex-shrink: 0 !important;
+  background-color: transparent !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+}
+
+/* Card 1: Brand card */
+.mye-ai-brand-card {
+  background: #ffffff !important;
+  border-radius: 24px !important;
+  padding: 16px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 16px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+}
+
+.ultramoodle-dark .mye-ai-brand-card {
+  background: #1e1e1e !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
+}
+
+.mye-ai-brand-logo {
+  width: 54px !important;
+  height: 54px !important;
+  object-fit: contain !important;
+  border-radius: 50% !important;
+  flex-shrink: 0 !important;
+}
+
+.mye-ai-brand-name {
+  font-size: 22px !important;
+  font-weight: 600 !important;
+  color: #000000 !important;
+  letter-spacing: -0.5px !important;
+}
+
+.ultramoodle-dark .mye-ai-brand-name {
+  color: #ffffff !important;
+}
+
+/* Focus modules cards */
+.mye-focus-cards {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 16px !important;
+}
+
+.mye-focus-card {
+  border-radius: 24px !important;
+  padding: 16px !important;
+  height: 110px !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 16px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+  box-sizing: border-box !important;
+  position: relative !important;
+}
+
+.mye-focus-card-body {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
+  height: 72px !important; /* Perfect match for 72px logo */
+  flex: 1 !important;
+  box-sizing: border-box !important;
+}
+
+/* Icon container matching the mockup's rounded rectangle shape */
+.mye-focus-icon-circle {
+  width: 72px !important;
+  height: 72px !important;
+  border-radius: 16px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  overflow: hidden !important;
+  flex-shrink: 0 !important;
+  background-color: transparent !important;
+}
+
+.mye-focus-icon-img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  border-radius: 16px !important;
+}
+
+.mye-focus-title {
+  font-size: 18px !important;
+  font-weight: 600 !important;
+  color: #000000 !important;
+}
+
+/* Colors for focus cards matching mockup */
+.mye-focus-myefrei {
+  background-color: #5a51a8 !important; /* Pastel Purple */
+}
+
+.mye-focus-moodle {
+  background-color: #ffcb95 !important; /* Pastel Peach/Orange */
+}
+
+.mye-focus-message {
+  background-color: #a8f59a !important; /* Pastel Green */
+}
+
+/* Switch (toggle) style */
+.mye-ai-switch {
+  position: relative !important;
+  display: inline-block !important;
+  width: 52px !important;
+  height: 28px !important;
+  margin: 0 !important;
+}
+
+.mye-ai-switch input {
+  display: none !important; /* Hide native checkbox circle completely */
+}
+
+.mye-ai-slider {
+  position: absolute !important;
+  cursor: pointer !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  background-color: rgba(255, 255, 255, 0.4) !important;
+  transition: .3s !important;
+  border-radius: 34px !important;
+}
+
+.mye-ai-slider:before {
+  position: absolute !important;
+  content: "" !important;
+  height: 22px !important;
+  width: 22px !important;
+  left: 3px !important;
+  bottom: 3px !important;
+  background-color: white !important;
+  transition: .3s !important;
+  border-radius: 50% !important;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+}
+
+/* Coloring checked toggle backgrounds dynamically to match mockup */
+.mye-focus-myefrei input:checked + .mye-ai-slider {
+  background-color: #0047ff !important; /* Blue toggle active */
+}
+.mye-focus-moodle input:checked + .mye-ai-slider {
+  background-color: #ff6b00 !important; /* Orange toggle active */
+}
+.mye-focus-message input:checked + .mye-ai-slider {
+  background-color: #00c01a !important; /* Green toggle active */
+}
+
+input:checked + .mye-ai-slider:before {
+  transform: translateX(24px) !important;
+}
+
+/* Right Content panel welcome screen */
+.mye-ai-landing {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 40px !important;
+}
+
+.mye-ai-landing-title {
+  font-size: 48px !important;
+  font-weight: 700 !important;
+  color: #000000 !important;
+  margin: 0 0 12px 0 !important;
+  letter-spacing: 1px !important;
+  font-family: 'Outfit', 'Segoe UI', sans-serif !important;
+  text-align: center !important;
+}
+
+.ultramoodle-dark .mye-ai-landing-title {
+  color: #ffffff !important;
+}
+
+.mye-ai-landing-subtitle {
+  font-size: 32px !important;
+  font-weight: 400 !important;
+  color: #000000 !important;
+  margin: 0 0 40px 0 !important;
+  text-align: center !important;
+  font-family: 'Outfit', 'Segoe UI', sans-serif !important;
+}
+
+.ultramoodle-dark .mye-ai-landing-subtitle {
+  color: #ffffff !important;
+}
+
+/* Thick black border search bar pill from mockup */
+.mye-ai-search-box {
+  width: 100% !important;
+  max-width: 620px !important;
+  position: relative !important;
+  margin-bottom: 0 !important;
+}
+
+#mye-ai-search-input {
+  width: 100% !important;
+  height: 64px !important;
+  background-color: #ffffff !important;
+  border: 3.5px solid #000000 !important; /* Thick black border */
+  border-radius: 50px !important;
+  padding: 0 64px 0 28px !important;
+  font-size: 20px !important;
+  color: #000000 !important;
+  outline: none !important;
+  box-sizing: border-box !important;
+  text-align: left !important; /* Left-aligned search typing */
+  font-family: 'Outfit', 'Segoe UI', system-ui, sans-serif !important;
+  transition: box-shadow 0.2s ease !important;
+}
+
+.ultramoodle-dark #mye-ai-search-input {
+  background-color: #1e1e1e !important;
+  border-color: #ffffff !important;
+  color: #ffffff !important;
+}
+
+#mye-ai-search-input::placeholder {
+  color: #888888 !important;
+  opacity: 1 !important;
+}
+
+#mye-ai-search-input:focus {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08) !important;
+}
+
+#mye-ai-search-submit {
+  position: absolute !important;
+  top: 50% !important;
+  right: 10px !important;
+  transform: translateY(-50%) !important;
+  border: none !important;
+  background-color: #000000 !important;
+  color: #ffffff !important;
+  width: 44px !important;
+  height: 44px !important;
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  transition: transform 0.15s ease, background-color 0.15s ease !important;
+  padding: 0 !important;
+}
+
+.ultramoodle-dark #mye-ai-search-submit {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+
+#mye-ai-search-submit:hover {
+  transform: translateY(-50%) scale(1.05) !important;
+}
+
+#mye-ai-search-submit svg {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+/* Quick links pill buttons */
+.mye-ai-quick-links {
+  display: flex !important;
+  gap: 16px !important;
+  justify-content: center !important;
+  flex-wrap: wrap !important;
+}
+
+.mye-ai-link-btn {
+  background-color: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  border-radius: 50px !important;
+  padding: 12px 10px !important;
+  font-size: 15px !important;
+  font-weight: 500 !important;
+  color: #555555 !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02) !important;
+  font-family: 'Outfit', 'Segoe UI', system-ui, sans-serif !important;
+  width: 180px !important;
+  text-align: center !important;
+  box-sizing: border-box !important;
+}
+
+.ultramoodle-dark .mye-ai-link-btn {
+  background-color: #1e1e1e !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  color: #bbbbbb !important;
+}
+
+.mye-ai-link-btn:hover {
+  background-color: #fcfcfc !important;
+  color: #000000 !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.05) !important;
+}
+
+.ultramoodle-dark .mye-ai-link-btn:hover {
+  background-color: #2a2a2a !important;
+  color: #ffffff !important;
+}
+
+/* Results panel viewport */
+.mye-ai-results-panel {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+}
+
+.mye-ai-results-header-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  margin-bottom: 20px !important;
+  flex-shrink: 0 !important;
+}
+
+.mye-ai-back-btn {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  background-color: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  border-radius: 50px !important;
+  padding: 10px 20px !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: #000000 !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+}
+
+.ultramoodle-dark .mye-ai-back-btn {
+  background-color: #1e1e1e !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  color: #ffffff !important;
+}
+
+.mye-ai-back-btn:hover {
+  background-color: #f3f4f6 !important;
+  transform: translateX(-2px) !important;
+}
+
+.mye-ai-mini-search-box {
+  display: flex !important;
+  align-items: center !important;
+  background-color: #ffffff !important;
+  border: 1.5px solid #000000 !important;
+  border-radius: 50px !important;
+  padding: 2px 4px 2px 16px !important;
+  width: 260px !important;
+}
+
+.ultramoodle-dark .mye-ai-mini-search-box {
+  background-color: #1e1e1e !important;
+  border-color: #ffffff !important;
+}
+
+#mye-ai-mini-search-input {
+  border: none !important;
+  outline: none !important;
+  background: transparent !important;
+  font-size: 14px !important;
+  flex: 1 !important;
+  color: #000000 !important;
+  height: 32px !important;
+}
+
+.ultramoodle-dark #mye-ai-mini-search-input {
+  color: #ffffff !important;
+}
+
+#mye-ai-mini-search-submit {
+  border: none !important;
+  background-color: #000000 !important;
+  color: #ffffff !important;
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  transition: transform 0.15s ease !important;
+}
+
+.ultramoodle-dark #mye-ai-mini-search-submit {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+
+#mye-ai-mini-search-submit:hover {
+  transform: scale(1.05) !important;
+}
+
+.mye-ai-results-scrollable {
+  flex: 1 !important;
+  overflow-y: auto !important;
+  padding-right: 8px !important;
+}
+
+.mye-ai-results-scrollable::-webkit-scrollbar {
+  width: 6px !important;
+}
+
+.mye-ai-results-scrollable::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.15) !important;
+  border-radius: 10px !important;
+}
+
+.ultramoodle-dark .mye-ai-results-scrollable::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Contact actions icons and link elements */
+.mye-ai-contact-btn {
+  transition: transform 0.2s ease, background-color 0.2s ease !important;
+}
+.mye-ai-contact-btn:hover {
+  transform: scale(1.1) !important;
+}
+
+.mye-portal-result {
+  animation: mye-card-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both !important;
+}
+
+@keyframes mye-card-in {
+  from { opacity: 0; transform: translateY(15px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Safe hidden classes overrides */
+.mye-ai-landing.mye-hidden,
+.mye-ai-results-panel.mye-hidden,
+.mye-hidden {
+  display: none !important;
+}
+
+.mye-ai-exit-btn {
+  margin-top: auto !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 10px !important;
+  background-color: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  border-radius: 50px !important;
+  padding: 14px 20px !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: #555555 !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04) !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  font-family: 'Outfit', 'Segoe UI', system-ui, sans-serif !important;
+}
+
+.mye-ai-exit-btn:hover {
+  background-color: #f8f9fa !important;
+  color: #000000 !important;
+  transform: translateY(-2px) !important;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08) !important;
+}
+
+.mye-ai-exit-btn svg {
+  transition: transform 0.2s ease !important;
+}
+
+.mye-ai-exit-btn:hover svg {
+  transform: translateX(-3px) !important;
+}
+
+.ultramoodle-dark .mye-ai-exit-btn {
+  background-color: #1e1e1e !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  color: #bbbbbb !important;
+}
+
+.ultramoodle-dark .mye-ai-exit-btn:hover {
+  background-color: #2a2a2a !important;
+  color: #ffffff !important;
+}
+
+/* Responsive adjustment */
+@media (max-width: 900px) {
+  .mye-ai-main-layout {
+    flex-direction: column !important;
+  }
+  .mye-ai-left-sidebar {
+    width: 100% !important;
+  }
+  .mye-focus-cards {
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+  }
+  .mye-focus-card {
+    flex: 1 1 calc(50% - 16px) !important;
+  }
+}
+
+/* AI Summary Card dark mode styling */
+.ultramoodle-dark .mye-ai-summary-card {
+  background: linear-gradient(135deg, #1e1b4b, #312e81) !important;
+  border-color: #4338ca !important;
+}
+.ultramoodle-dark .mye-ai-summary-card strong {
+  color: #818cf8 !important;
+}
+.ultramoodle-dark .mye-ai-summary-card div,
+.ultramoodle-dark .mye-ai-summary-card span {
+  color: #e2e8f0 !important;
+}
+
+.mye-ai-summary-module-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(0, 0, 0, 0.08);
+}
+.mye-ai-summary-module-row:last-child {
+  border-bottom: none;
+}
+.ultramoodle-dark .mye-ai-summary-module-row {
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Portal Chat Message styling (ChatGPT Style) */
+.mye-chat-row-user {
+  display: flex !important;
+  justify-content: flex-end !important;
+  margin-bottom: 24px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.mye-chat-bubble-user {
+  max-width: 70% !important;
+  padding: 12px 20px !important;
+  border-radius: 20px 20px 4px 20px !important;
+  font-size: 16px !important;
+  line-height: 1.5 !important;
+  word-break: break-word !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 500 !important;
+  background-color: #000000 !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+}
+
+.ultramoodle-dark .mye-chat-bubble-user {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+  box-shadow: 0 4px 12px rgba(255, 255, 255, 0.05) !important;
+}
+
+.mye-chat-row-bot {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  margin-bottom: 24px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.mye-chat-bot-header {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  margin-bottom: 8px !important;
+  font-family: 'Outfit', sans-serif !important;
+}
+
+.mye-chat-bot-avatar {
+  font-size: 18px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.mye-chat-bot-name {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: #64748b !important;
+}
+
+.ultramoodle-dark .mye-chat-bot-name {
+  color: #94a3b8 !important;
+}
+
+.mye-chat-bot-content {
+  width: 100% !important;
+  padding-left: 28px !important;
+  box-sizing: border-box !important;
+}
+
+/* Override portal search result spacing inside message stream */
+.mye-chat-bot-content .mye-portal-result {
+  margin-bottom: 8px !important;
+}
+.mye-chat-bot-content .mye-portal-result:last-child {
+  margin-bottom: 0 !important;
+}
+
