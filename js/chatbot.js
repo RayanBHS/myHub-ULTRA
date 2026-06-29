@@ -43,6 +43,18 @@
     
     const myhubLogoUrl = chrome.runtime.getURL('img/logoMyHub.png');
 
+    const PROVIDER_LOGOS = {
+      gemini: chrome.runtime.getURL('AIlogo/gemini.png'),
+      openai: chrome.runtime.getURL('AIlogo/chatgpt.png'),
+      claude: chrome.runtime.getURL('AIlogo/Claude.png'),
+      grok: chrome.runtime.getURL('AIlogo/Grok.png'),
+      groq: chrome.runtime.getURL('AIlogo/Groq.png'),
+      mistral: chrome.runtime.getURL('AIlogo/Mistral.png'),
+      qwen: chrome.runtime.getURL('AIlogo/Qwen.png'),
+      deepseek: chrome.runtime.getURL('AIlogo/Deepseek.png'),
+      openrouter: chrome.runtime.getURL('AIlogo/Openrouter.png')
+    };
+
     // Helper to fetch from myEfrei with absolute URL (with credentials for session cookies)
     const myeFetch = async (path, options = {}) => {
       const url = MYEFREI_ORIGIN + path;
@@ -1664,10 +1676,98 @@
       const modeSimpleBtn = document.getElementById('mye-mode-simple');
       const modeUltraBtn = document.getElementById('mye-mode-ultra');
       const ultraConfig = document.getElementById('mye-ultra-config');
-      const providerSelect = document.getElementById('mye-ai-provider');
       const apiKeyInput = document.getElementById('mye-ai-apikey');
       const toggleKeyBtn = document.getElementById('mye-ai-toggle-key');
       const keyStatus = document.getElementById('mye-ai-key-status');
+
+      // Custom Dropdown elements
+      const providerTrigger = document.getElementById('mye-ai-provider-trigger');
+      const providerOptions = document.getElementById('mye-ai-provider-options');
+      const selectedLogo = document.getElementById('mye-ai-provider-selected-logo');
+      const selectedName = document.getElementById('mye-ai-provider-selected-name');
+
+      const providersData = [
+        { id: 'gemini', name: 'Gemini' },
+        { id: 'openai', name: 'ChatGPT' },
+        { id: 'claude', name: 'Claude' },
+        { id: 'grok', name: 'Grok' },
+        { id: 'groq', name: 'Groq' },
+        { id: 'mistral', name: 'Mistral' },
+        { id: 'qwen', name: 'Qwen' },
+        { id: 'deepseek', name: 'DeepSeek' },
+        { id: 'openrouter', name: 'OpenRouter' }
+      ];
+
+      const updateSelectedProviderUI = (providerId) => {
+        const prov = providersData.find(p => p.id === providerId) || providersData[0];
+        const logoUrl = PROVIDER_LOGOS[prov.id];
+        if (selectedLogo) {
+          selectedLogo.innerHTML = logoUrl ? `<img src="${logoUrl}" alt="${prov.name}">` : '';
+        }
+        if (selectedName) selectedName.textContent = prov.name;
+        
+        // Mark active option
+        document.querySelectorAll('.mye-custom-dropdown-option').forEach(opt => {
+          if (opt.dataset.value === prov.id) {
+            opt.classList.add('mye-custom-dropdown-option-active');
+          } else {
+            opt.classList.remove('mye-custom-dropdown-option-active');
+          }
+        });
+      };
+
+      // Populate custom dropdown options
+      if (providerOptions) {
+        providerOptions.innerHTML = providersData.map(p => {
+          const logoUrl = PROVIDER_LOGOS[p.id];
+          const imgTag = logoUrl ? `<img src="${logoUrl}" alt="${p.name}">` : '';
+          return `
+            <div class="mye-custom-dropdown-option" data-value="${p.id}">
+              <span class="mye-custom-dropdown-option-logo">${imgTag}</span>
+              <span>${p.name}</span>
+            </div>
+          `;
+        }).join('');
+
+        // Option click listener
+        providerOptions.querySelectorAll('.mye-custom-dropdown-option').forEach(opt => {
+          opt.addEventListener('click', (e) => {
+            e.stopPropagation();
+            aiProvider = opt.dataset.value;
+            chrome.storage.local.set({ ai_provider: aiProvider });
+            updateSelectedProviderUI(aiProvider);
+            providerOptions.classList.add('mye-hidden');
+            if (providerTrigger) providerTrigger.classList.remove('mye-custom-dropdown-trigger-active');
+          });
+        });
+      }
+
+      // Trigger click listener
+      if (providerTrigger) {
+        providerTrigger.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (providerOptions) {
+            const isHidden = providerOptions.classList.contains('mye-hidden');
+            if (isHidden) {
+              providerOptions.classList.remove('mye-hidden');
+              providerTrigger.classList.add('mye-custom-dropdown-trigger-active');
+            } else {
+              providerOptions.classList.add('mye-hidden');
+              providerTrigger.classList.remove('mye-custom-dropdown-trigger-active');
+            }
+          }
+        });
+      }
+
+      // Close dropdown when clicking outside
+      document.addEventListener('click', () => {
+        if (providerOptions) {
+          providerOptions.classList.add('mye-hidden');
+        }
+        if (providerTrigger) {
+          providerTrigger.classList.remove('mye-custom-dropdown-trigger-active');
+        }
+      });
 
       const updateModeUI = () => {
         if (modeSimpleBtn) {
@@ -1700,10 +1800,9 @@
         updateModeUI();
       });
 
-      if (providerSelect) providerSelect.addEventListener('change', () => {
-        aiProvider = providerSelect.value;
-        chrome.storage.local.set({ ai_provider: aiProvider });
-      });
+      // Initialize UI dropdown and mode
+      updateSelectedProviderUI(aiProvider);
+      updateModeUI();
 
       if (apiKeyInput) {
         let saveTimer = null;
@@ -2762,17 +2861,16 @@ Ne mets aucun autre texte dans ton message lorsque tu génères un CALL_API. Fai
               <!-- ULTRA config panel -->
               <div id="mye-ultra-config" style="display: ${aiMode === 'ultra' ? 'block' : 'none'};">
                 <label class="mye-ultra-label">Provider IA</label>
-                <select id="mye-ai-provider" class="mye-ultra-select">
-                  <option value="gemini" ${aiProvider === 'gemini' ? 'selected' : ''}>🔵 Gemini</option>
-                  <option value="openai" ${aiProvider === 'openai' ? 'selected' : ''}>🟢 ChatGPT</option>
-                  <option value="claude" ${aiProvider === 'claude' ? 'selected' : ''}>🟠 Claude</option>
-                  <option value="grok" ${aiProvider === 'grok' ? 'selected' : ''}>⚫ Grok</option>
-                  <option value="groq" ${aiProvider === 'groq' ? 'selected' : ''}>🔴 Groq</option>
-                  <option value="mistral" ${aiProvider === 'mistral' ? 'selected' : ''}>🟠 Mistral</option>
-                  <option value="qwen" ${aiProvider === 'qwen' ? 'selected' : ''}>🟣 Qwen</option>
-                  <option value="deepseek" ${aiProvider === 'deepseek' ? 'selected' : ''}>🔵 DeepSeek</option>
-                  <option value="openrouter" ${aiProvider === 'openrouter' ? 'selected' : ''}>🪐 OpenRouter</option>
-                </select>
+                <div class="mye-custom-dropdown-container">
+                  <div id="mye-ai-provider-trigger" class="mye-custom-dropdown-trigger">
+                    <span id="mye-ai-provider-selected-logo" class="mye-custom-dropdown-selected-logo-container"></span>
+                    <span id="mye-ai-provider-selected-name">Gemini</span>
+                    <span class="mye-custom-dropdown-arrow">▼</span>
+                  </div>
+                  <div id="mye-ai-provider-options" class="mye-custom-dropdown-options mye-hidden">
+                    <!-- Choices injected by JS -->
+                  </div>
+                </div>
                 
                 <label class="mye-ultra-label" style="margin-top: 10px !important;">Clé API</label>
                 <div class="mye-ultra-input-container">

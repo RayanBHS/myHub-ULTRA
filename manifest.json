@@ -53,7 +53,8 @@
     {
       "resources": [
         "page/chatbot.html",
-        "img/*"
+        "img/*",
+        "AIlogo/*"
       ],
       "matches": [
         "<all_urls>"

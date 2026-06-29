@@ -1588,5 +1588,171 @@ input:checked + .mye-ai-slider:before {
   font-weight: 600 !important;
 }
 
+/* Custom Styled dropdown */
+.mye-custom-dropdown-container {
+  position: relative !important;
+  width: 100% !important;
+  font-family: 'Outfit', sans-serif !important;
+  box-sizing: border-box !important;
+}
+
+.mye-custom-dropdown-trigger {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 10px 12px !important;
+  border-radius: 12px !important;
+  border: 1.5px solid #e2e8f0 !important;
+  background: #f8fafc !important;
+  font-size: 13px !important;
+  color: #1e293b !important;
+  cursor: pointer !important;
+  user-select: none !important;
+  transition: all 0.2s ease !important;
+  box-sizing: border-box !important;
+}
+
+.ultramoodle-dark .mye-custom-dropdown-trigger {
+  background: #2a2a2a !important;
+  border-color: #3a3a3a !important;
+  color: #ffffff !important;
+}
+
+.mye-custom-dropdown-trigger:hover {
+  border-color: #cbd5e1 !important;
+  background: #f1f5f9 !important;
+}
+
+.ultramoodle-dark .mye-custom-dropdown-trigger:hover {
+  border-color: #4a4a4a !important;
+  background: #333333 !important;
+}
+
+.mye-custom-dropdown-trigger-active {
+  border-color: #6366f1 !important;
+  background: #ffffff !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15) !important;
+}
+
+.ultramoodle-dark .mye-custom-dropdown-trigger-active {
+  border-color: #8b5cf6 !important;
+  background: #1e1e1e !important;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.2) !important;
+}
+
+.mye-custom-dropdown-selected-logo-container {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 18px !important;
+  height: 18px !important;
+  flex-shrink: 0 !important;
+}
+
+.mye-custom-dropdown-selected-logo-container svg,
+.mye-custom-dropdown-selected-logo-container img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+}
+
+.mye-custom-dropdown-arrow {
+  margin-left: auto !important;
+  font-size: 10px !important;
+  color: #94a3b8 !important;
+  transition: transform 0.2s ease !important;
+}
+
+.mye-custom-dropdown-trigger-active .mye-custom-dropdown-arrow {
+  transform: rotate(180deg) !important;
+}
+
+.mye-custom-dropdown-options {
+  position: absolute !important;
+  top: calc(100% + 6px) !important;
+  left: 0 !important;
+  width: 100% !important;
+  background: #ffffff !important;
+  border: 1.5px solid #e2e8f0 !important;
+  border-radius: 14px !important;
+  box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1) !important;
+  z-index: 9999 !important;
+  padding: 6px !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  max-height: 250px !important;
+  overflow-y: auto !important;
+  transform-origin: top !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.ultramoodle-dark .mye-custom-dropdown-options {
+  background: #1e1e1e !important;
+  border-color: #3a3a3a !important;
+  box-shadow: 0 10px 25px -5px rgba(0,0,0,0.4), 0 8px 10px -6px rgba(0,0,0,0.4) !important;
+}
+
+.mye-custom-dropdown-options.mye-hidden {
+  opacity: 0 !important;
+  transform: scaleY(0.95) !important;
+  pointer-events: none !important;
+}
+
+.mye-custom-dropdown-option {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 8px 10px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  color: #334155 !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+  box-sizing: border-box !important;
+}
+
+.ultramoodle-dark .mye-custom-dropdown-option {
+  color: #cbd5e1 !important;
+}
+
+.mye-custom-dropdown-option:hover {
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+.ultramoodle-dark .mye-custom-dropdown-option:hover {
+  background: #2a2a2a !important;
+  color: #ffffff !important;
+}
+
+.mye-custom-dropdown-option-active {
+  background: #eef2ff !important;
+  color: #4f46e5 !important;
+  font-weight: 600 !important;
+}
+
+.ultramoodle-dark .mye-custom-dropdown-option-active {
+  background: rgba(139, 92, 246, 0.15) !important;
+  color: #a78bfa !important;
+}
+
+.mye-custom-dropdown-option-logo {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 18px !important;
+  height: 18px !important;
+  flex-shrink: 0 !important;
+}
+
+.mye-custom-dropdown-option-logo svg,
+.mye-custom-dropdown-option-logo img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+}
+
 
 
