@@ -1441,4 +1441,152 @@ input:checked + .mye-ai-slider:before {
   100% { transform: rotate(360deg); }
 }
 
+/* Mode Toggle Card & Ultra configuration styling */
+.mye-mode-toggle-card {
+  background: #ffffff !important;
+  border-radius: 24px !important;
+  padding: 16px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+  box-sizing: border-box !important;
+  border: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  transition: all 0.3s ease !important;
+}
+
+.ultramoodle-dark .mye-mode-toggle-card {
+  background: #1e1e1e !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
+}
+
+.mye-segmented-control {
+  display: flex !important;
+  border-radius: 12px !important;
+  overflow: hidden !important;
+  background: #f1f5f9 !important;
+  padding: 3px !important;
+  border: none !important;
+}
+
+.ultramoodle-dark .mye-segmented-control {
+  background: #2a2a2a !important;
+}
+
+.mye-mode-btn {
+  flex: 1 !important;
+  padding: 8px 0 !important;
+  border: none !important;
+  cursor: pointer !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  border-radius: 10px !important;
+  transition: all 0.2s ease !important;
+  background: transparent !important;
+  color: #64748b !important;
+}
+
+.ultramoodle-dark .mye-mode-btn {
+  color: #94a3b8 !important;
+}
+
+.mye-mode-btn.mye-mode-active-simple {
+  background: #ffffff !important;
+  color: #1e293b !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important;
+}
+
+.ultramoodle-dark .mye-mode-btn.mye-mode-active-simple {
+  background: #3a3a3a !important;
+  color: #ffffff !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+}
+
+.mye-mode-btn.mye-mode-active-ultra {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+  color: #ffffff !important;
+  box-shadow: 0 2px 8px rgba(99,102,241,0.25) !important;
+}
+
+/* ULTRA config styling */
+.mye-ultra-label {
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  color: #64748b !important;
+  font-family: 'Outfit', sans-serif !important;
+  display: block !important;
+  margin-bottom: 4px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.5px !important;
+}
+
+.ultramoodle-dark .mye-ultra-label {
+  color: #94a3b8 !important;
+}
+
+.mye-ultra-select, .mye-ultra-input {
+  width: 100% !important;
+  padding: 10px 12px !important;
+  border-radius: 12px !important;
+  border: 1.5px solid #e2e8f0 !important;
+  background: #f8fafc !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 13px !important;
+  color: #1e293b !important;
+  box-sizing: border-box !important;
+  outline: none !important;
+  transition: all 0.2s ease !important;
+}
+
+.ultramoodle-dark .mye-ultra-select, .ultramoodle-dark .mye-ultra-input {
+  background: #2a2a2a !important;
+  border-color: #3a3a3a !important;
+  color: #ffffff !important;
+}
+
+.mye-ultra-select:focus, .mye-ultra-input:focus {
+  border-color: #a5b4fc !important;
+  background: #ffffff !important;
+}
+
+.ultramoodle-dark .mye-ultra-select:focus, .ultramoodle-dark .mye-ultra-input:focus {
+  border-color: #4f46e5 !important;
+  background: #1e1e1e !important;
+}
+
+.mye-ultra-input {
+  font-family: 'Outfit', monospace !important;
+  padding-right: 40px !important;
+}
+
+.mye-ultra-input-container {
+  position: relative !important;
+}
+
+.mye-ultra-toggle-key {
+  position: absolute !important;
+  right: 8px !important;
+  top: 50 !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  border: none !important;
+  background: none !important;
+  cursor: pointer !important;
+  color: #94a3b8 !important;
+  font-size: 14px !important;
+  padding: 4px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.mye-ultra-key-status {
+  font-size: 11px !important;
+  margin-top: 4px !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 600 !important;
+}
+
+
 

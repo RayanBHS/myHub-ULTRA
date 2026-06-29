@@ -10,7 +10,16 @@
   "host_permissions": [
     "*://moodle.myefrei.fr/*",
     "*://*.myefrei.fr/*",
-    "*://*.efrei.fr/*"
+    "*://*.efrei.fr/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
+    "https://api.x.ai/*",
+    "https://api.groq.com/*",
+    "https://api.mistral.ai/*",
+    "https://dashscope.aliyuncs.com/*",
+    "https://api.deepseek.com/*",
+    "https://openrouter.ai/*"
   ],
   "background": {
     "service_worker": "background.js"

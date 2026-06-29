@@ -870,11 +870,17 @@
     // Conversational context state
     let lastSearchType = '';
     let newsOffset = 0;
+    let ultraHistory = [];
     
     // DM conversation state machine
     // States: null, 'awaiting_recipient', 'awaiting_message'
     let dmState = null;
     let dmSelectedUser = null; // { id, name, email }
+    
+    // ULTRA mode state
+    let aiMode = 'simple'; // 'simple' | 'ultra'
+    let aiProvider = 'gemini'; // 'gemini' | 'openai' | 'claude' | 'grok'
+    let aiApiKey = '';
     
     const myhubLogoUrl = chrome.runtime.getURL('img/logoMyHub.png');
 
@@ -1133,29 +1139,81 @@
     };
 
     const searchUsersCrossPlatform = async (query, sesskey, userid) => {
-      // Primary: core_message_message_search_users (the real working Moodle endpoint)
-      try {
-        const data = await callMoodleAjaxCrossPlatform('core_message_message_search_users', { userid, search: query, limitfrom: 0, limitnum: 10 }, sesskey, userid);
-        const contacts = (data && data.contacts) ? data.contacts : [];
-        const noncontacts = (data && data.noncontacts) ? data.noncontacts : [];
-        if (contacts.length > 0 || noncontacts.length > 0) {
-          return [...contacts, ...noncontacts];
+      const qCleaned = (query || '').trim();
+      if (!qCleaned) return [];
+
+      // Internal helper to perform a standard Moodle search try
+      const doSingleSearch = async (sQuery) => {
+        // Primary: core_message_message_search_users
+        try {
+          const data = await callMoodleAjaxCrossPlatform('core_message_message_search_users', { userid, search: sQuery, limitfrom: 0, limitnum: 10 }, sesskey, userid);
+          const contacts = (data && data.contacts) ? data.contacts : [];
+          const noncontacts = (data && data.noncontacts) ? data.noncontacts : [];
+          if (contacts.length > 0 || noncontacts.length > 0) {
+            return [...contacts, ...noncontacts];
+          }
+        } catch (e) {
+          console.log('[IA Search] core_message_message_search_users failed for: ' + sQuery, e);
         }
-      } catch (e) {
-        console.log('[IA Search] core_message_message_search_users failed, trying fallbacks...', e);
+        // Fallback 1: core_message_search_users
+        try {
+          const data2 = await callMoodleAjaxCrossPlatform('core_message_search_users', { userid, search: sQuery, limitfrom: 0, limitnum: 10 }, sesskey, userid);
+          const c2 = (data2 && data2.contacts) ? data2.contacts : [];
+          const nc2 = (data2 && data2.noncontacts) ? data2.noncontacts : [];
+          if (c2.length > 0 || nc2.length > 0) return [...c2, ...nc2];
+        } catch {}
+        // Fallback 2: core_user_search_identity
+        try {
+          const data3 = await callMoodleAjaxCrossPlatform('core_user_search_identity', { query: sQuery, capabilities: [] }, sesskey, userid);
+          return (data3 && data3.list) ? data3.list : [];
+        } catch {
+          return [];
+        }
+      };
+
+      // 1. Try search with exact query
+      let results = await doSingleSearch(qCleaned);
+      if (results.length > 0) return results;
+
+      // 2. Try search with swapped words (e.g. "Vibert Remi" -> "Remi Vibert")
+      const words = qCleaned.split(/\s+/).filter(w => w.length >= 2);
+      if (words.length >= 2) {
+        // Swap first two words
+        const swappedQuery = [words[1], words[0], ...words.slice(2)].join(' ');
+        results = await doSingleSearch(swappedQuery);
+        if (results.length > 0) return results;
       }
-      // Fallback 1: core_message_search_users
-      try {
-        const data2 = await callMoodleAjaxCrossPlatform('core_message_search_users', { userid, search: query, limitfrom: 0, limitnum: 10 }, sesskey, userid);
-        const c2 = (data2 && data2.contacts) ? data2.contacts : [];
-        const nc2 = (data2 && data2.noncontacts) ? data2.noncontacts : [];
-        if (c2.length > 0 || nc2.length > 0) return [...c2, ...nc2];
-      } catch {}
-      // Fallback 2: core_user_search_identity
-      try {
-        const data3 = await callMoodleAjaxCrossPlatform('core_user_search_identity', { query, capabilities: [] }, sesskey, userid);
-        return (data3 && data3.list) ? data3.list : [];
-      } catch { return []; }
+
+      // 3. Fallback: search for each word individually (length >= 3) and merge results
+      const searchWords = words.filter(w => w.length >= 3);
+      if (searchWords.length > 0) {
+        const searchPromises = searchWords.map(word => doSingleSearch(word).catch(() => []));
+        const allResultsArrays = await Promise.all(searchPromises);
+        
+        // Merge results and remove duplicates by user id
+        const mergedMap = new Map();
+        allResultsArrays.flat().forEach(u => {
+          if (u && u.id && !mergedMap.has(u.id)) {
+            mergedMap.set(u.id, u);
+          }
+        });
+        
+        // Prioritize results that match more search terms in their full name
+        const mergedList = Array.from(mergedMap.values());
+        mergedList.sort((a, b) => {
+          const nameA = (a.fullname || ((a.firstname || '') + ' ' + (a.lastname || '')).trim()).toLowerCase();
+          const nameB = (b.fullname || ((b.firstname || '') + ' ' + (b.lastname || '')).trim()).toLowerCase();
+          
+          const scoreA = searchWords.reduce((score, w) => score + (nameA.includes(w.toLowerCase()) ? 1 : 0), 0);
+          const scoreB = searchWords.reduce((score, w) => score + (nameB.includes(w.toLowerCase()) ? 1 : 0), 0);
+          
+          return scoreB - scoreA; // More matches first
+        });
+        
+        return mergedList;
+      }
+
+      return [];
     };
 
     // Algorithmic string utilities
@@ -2424,6 +2482,74 @@
       if (toggleMoodle) toggleMoodle.addEventListener('change', saveSettings);
       if (toggleMessage) toggleMessage.addEventListener('change', saveSettings);
 
+      // ── ULTRA Mode UI Handlers ──
+      const modeSimpleBtn = document.getElementById('mye-mode-simple');
+      const modeUltraBtn = document.getElementById('mye-mode-ultra');
+      const ultraConfig = document.getElementById('mye-ultra-config');
+      const providerSelect = document.getElementById('mye-ai-provider');
+      const apiKeyInput = document.getElementById('mye-ai-apikey');
+      const toggleKeyBtn = document.getElementById('mye-ai-toggle-key');
+      const keyStatus = document.getElementById('mye-ai-key-status');
+
+      const updateModeUI = () => {
+        if (modeSimpleBtn) {
+          if (aiMode === 'simple') {
+            modeSimpleBtn.classList.add('mye-mode-active-simple');
+          } else {
+            modeSimpleBtn.classList.remove('mye-mode-active-simple');
+          }
+        }
+        if (modeUltraBtn) {
+          if (aiMode === 'ultra') {
+            modeUltraBtn.classList.add('mye-mode-active-ultra');
+          } else {
+            modeUltraBtn.classList.remove('mye-mode-active-ultra');
+          }
+        }
+        if (ultraConfig) ultraConfig.style.display = aiMode === 'ultra' ? 'block' : 'none';
+      };
+
+      if (modeSimpleBtn) modeSimpleBtn.addEventListener('click', () => {
+        aiMode = 'simple';
+        ultraHistory = [];
+        chrome.storage.local.set({ ai_mode: 'simple' });
+        updateModeUI();
+      });
+      if (modeUltraBtn) modeUltraBtn.addEventListener('click', () => {
+        aiMode = 'ultra';
+        ultraHistory = [];
+        chrome.storage.local.set({ ai_mode: 'ultra' });
+        updateModeUI();
+      });
+
+      if (providerSelect) providerSelect.addEventListener('change', () => {
+        aiProvider = providerSelect.value;
+        chrome.storage.local.set({ ai_provider: aiProvider });
+      });
+
+      if (apiKeyInput) {
+        let saveTimer = null;
+        apiKeyInput.addEventListener('input', () => {
+          clearTimeout(saveTimer);
+          saveTimer = setTimeout(() => {
+            aiApiKey = apiKeyInput.value.trim();
+            chrome.storage.local.set({ ai_apikey: aiApiKey });
+            if (keyStatus) {
+              keyStatus.textContent = aiApiKey ? '✓ Clé sauvegardée' : 'Entrez votre clé API';
+              keyStatus.style.color = aiApiKey ? '#059669' : '#94a3b8';
+            }
+          }, 500);
+        });
+      }
+
+      if (toggleKeyBtn && apiKeyInput) {
+        toggleKeyBtn.addEventListener('click', () => {
+          const isHidden = apiKeyInput.type === 'password';
+          apiKeyInput.type = isHidden ? 'text' : 'password';
+          toggleKeyBtn.textContent = isHidden ? '🔒' : '👁';
+        });
+      }
+
       const exitBtn = document.getElementById('mye-ai-exit-btn');
       if (exitBtn) {
         exitBtn.addEventListener('click', () => {
@@ -2455,6 +2581,14 @@
           if (bottomInput) { bottomInput.value = ''; bottomInput.focus(); }
         } else {
           if (landingInput) { landingInput.value = ''; }
+        }
+
+        // Bypass DM state machine if ULTRA mode is active (let LLM handle it)
+        if (aiMode === 'ultra') {
+          dmState = null;
+          dmSelectedUser = null;
+          await handleUltraQuery(text);
+          return;
         }
 
         // ── DM Conversation State Machine ──
@@ -2563,6 +2697,7 @@
         // ── Normal search flow ──
         dmState = null;
         dmSelectedUser = null;
+
         showPortalLoading();
 
         try {
@@ -2593,6 +2728,7 @@
           }
           lastSearchType = '';
           newsOffset = 0;
+          ultraHistory = [];
         });
       }
 
@@ -2912,6 +3048,507 @@
       }
     };
 
+    // ═══════════════════════════════════════════
+    // ULTRA MODE — Multi-provider LLM Integration
+    // ═══════════════════════════════════════════
+
+    // Simple markdown-to-HTML parser
+    const parseMarkdownToHtml = (md) => {
+      if (!md) return '';
+      let html = md;
+
+      // Escape HTML tags to prevent arbitrary HTML injection (allowing bold/italics etc in next steps)
+      html = html.replace(/&/g, '&amp;')
+                 .replace(/</g, '&lt;')
+                 .replace(/>/g, '&gt;');
+
+      // Code blocks: ```code```
+      html = html.replace(/```([\s\S]*?)```/g, '<pre style="background: rgba(0,0,0,0.05); padding: 10px; border-radius: 8px; font-family: monospace; font-size: 13px; overflow-x: auto; margin: 10px 0;">$1</pre>');
+
+      // Inline code: `code`
+      html = html.replace(/`(.*?)`/g, '<code style="background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px;">$1</code>');
+
+      // Bold: **text** or __text__
+      html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      html = html.replace(/__(.*?)__/g, '<strong>$1</strong>');
+
+      // Italics: *text* or _text_
+      html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+      html = html.replace(/_(.*?)_/g, '<em>$1</em>');
+
+      // Split lines to construct paragraphs and lists
+      const lines = html.split('\n');
+      let inList = false;
+      const parsedLines = lines.map(line => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('* ') || trimmed.startsWith('- ')) {
+          const content = trimmed.substring(2);
+          let prefix = '';
+          if (!inList) {
+            inList = true;
+            prefix = '<ul style="margin: 8px 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; list-style-type: disc;">';
+          }
+          return prefix + `<li>${content}</li>`;
+        } else {
+          let suffix = '';
+          if (inList) {
+            inList = false;
+            suffix = '</ul>';
+          }
+          return suffix + (trimmed ? `<p style="margin: 8px 0;">${trimmed}</p>` : '');
+        }
+      });
+      if (inList) {
+        parsedLines.push('</ul>');
+      }
+
+      return parsedLines.join('');
+    };
+
+    const LLM_PROVIDERS = {
+      gemini: {
+        name: 'Gemini',
+        model: 'gemini-2.0-flash',
+        buildRequest: (messages, apiKey) => {
+          const systemMsg = messages.find(m => m.role === 'system');
+          const userMsgs = messages.filter(m => m.role !== 'system');
+          const contents = userMsgs.map(m => ({
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: m.content }]
+          }));
+          return {
+            url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+            options: {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                system_instruction: systemMsg ? { parts: [{ text: systemMsg.content }] } : undefined,
+                contents,
+                generationConfig: { temperature: 0.7, maxOutputTokens: 4096 }
+              })
+            }
+          };
+        },
+        parseResponse: (data) => {
+          if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+            return data.candidates[0].content.parts.map(p => p.text).join('');
+          }
+          if (data.error) throw new Error(data.error.message || 'Gemini API error');
+          throw new Error('Unexpected Gemini response format');
+        }
+      },
+      openai: {
+        name: 'ChatGPT',
+        model: 'gpt-4o-mini',
+        buildRequest: (messages, apiKey) => ({
+          url: 'https://api.openai.com/v1/chat/completions',
+          options: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({ model: 'gpt-4o-mini', messages, temperature: 0.7, max_tokens: 4096 })
+          }
+        }),
+        parseResponse: (data) => {
+          if (data.choices && data.choices[0]) return data.choices[0].message.content;
+          if (data.error) throw new Error(data.error.message || 'OpenAI API error');
+          throw new Error('Unexpected OpenAI response format');
+        }
+      },
+      claude: {
+        name: 'Claude',
+        model: 'claude-sonnet-4-20250514',
+        buildRequest: (messages, apiKey) => {
+          const systemMsg = messages.find(m => m.role === 'system');
+          const chatMsgs = messages.filter(m => m.role !== 'system');
+          return {
+            url: 'https://api.anthropic.com/v1/messages',
+            options: {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': apiKey,
+                'anthropic-version': '2023-06-01',
+                'anthropic-dangerous-direct-browser-access': 'true'
+              },
+              body: JSON.stringify({
+                model: 'claude-sonnet-4-20250514',
+                max_tokens: 4096,
+                system: systemMsg ? systemMsg.content : undefined,
+                messages: chatMsgs
+              })
+            }
+          };
+        },
+        parseResponse: (data) => {
+          if (data.content && data.content[0]) return data.content[0].text;
+          if (data.error) throw new Error(data.error.message || 'Claude API error');
+          throw new Error('Unexpected Claude response format');
+        }
+      },
+      grok: {
+        name: 'Grok',
+        model: 'grok-3-mini',
+        buildRequest: (messages, apiKey) => ({
+          url: 'https://api.x.ai/v1/chat/completions',
+          options: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({ model: 'grok-3-mini', messages, temperature: 0.7, max_tokens: 4096 })
+          }
+        }),
+        parseResponse: (data) => {
+          if (data.choices && data.choices[0]) return data.choices[0].message.content;
+          if (data.error) throw new Error(data.error.message || 'Grok API error');
+          throw new Error('Unexpected Grok response format');
+        }
+      },
+      groq: {
+        name: 'Groq',
+        model: 'llama-3.3-70b-versatile',
+        buildRequest: (messages, apiKey) => ({
+          url: 'https://api.groq.com/openai/v1/chat/completions',
+          options: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages, temperature: 0.7, max_tokens: 4096 })
+          }
+        }),
+        parseResponse: (data) => {
+          if (data.choices && data.choices[0]) return data.choices[0].message.content;
+          if (data.error) throw new Error(data.error.message || 'Groq API error');
+          throw new Error('Unexpected Groq response format');
+        }
+      },
+      mistral: {
+        name: 'Mistral',
+        model: 'mistral-large-latest',
+        buildRequest: (messages, apiKey) => ({
+          url: 'https://api.mistral.ai/v1/chat/completions',
+          options: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({ model: 'mistral-large-latest', messages, temperature: 0.7, max_tokens: 4096 })
+          }
+        }),
+        parseResponse: (data) => {
+          if (data.choices && data.choices[0]) return data.choices[0].message.content;
+          if (data.error) throw new Error(data.error.message || 'Mistral API error');
+          throw new Error('Unexpected Mistral response format');
+        }
+      },
+      qwen: {
+        name: 'Qwen',
+        model: 'qwen-max',
+        buildRequest: (messages, apiKey) => ({
+          url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+          options: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({ model: 'qwen-max', messages, temperature: 0.7, max_tokens: 4096 })
+          }
+        }),
+        parseResponse: (data) => {
+          if (data.choices && data.choices[0]) return data.choices[0].message.content;
+          if (data.error) throw new Error(data.error.message || 'Qwen API error');
+          throw new Error('Unexpected Qwen response format');
+        }
+      },
+      deepseek: {
+        name: 'DeepSeek',
+        model: 'deepseek-chat',
+        buildRequest: (messages, apiKey) => ({
+          url: 'https://api.deepseek.com/chat/completions',
+          options: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({ model: 'deepseek-chat', messages, temperature: 0.7, max_tokens: 4096 })
+          }
+        }),
+        parseResponse: (data) => {
+          if (data.choices && data.choices[0]) return data.choices[0].message.content;
+          if (data.error) throw new Error(data.error.message || 'DeepSeek API error');
+          throw new Error('Unexpected DeepSeek response format');
+        }
+      },
+      openrouter: {
+        name: 'OpenRouter',
+        model: 'google/gemini-2.5-flash',
+        buildRequest: (messages, apiKey) => ({
+          url: 'https://openrouter.ai/api/v1/chat/completions',
+          options: {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+              'HTTP-Referer': 'https://myhub.efrei.fr',
+              'X-Title': 'myHub ULTRA'
+            },
+            body: JSON.stringify({ model: 'google/gemini-2.5-flash', messages, temperature: 0.7, max_tokens: 4096 })
+          }
+        }),
+        parseResponse: (data) => {
+          if (data.choices && data.choices[0]) return data.choices[0].message.content;
+          if (data.error) throw new Error(data.error.message || (data.error.metadata && data.error.metadata.raw) || 'OpenRouter API error');
+          throw new Error('Unexpected OpenRouter response format');
+        }
+      }
+    };
+
+    // Unified LLM caller
+    const callLLM = async (messages) => {
+      if (!aiApiKey) throw new Error('Clé API manquante. Configurez votre clé dans la barre latérale.');
+      const provider = LLM_PROVIDERS[aiProvider];
+      if (!provider) throw new Error(`Provider inconnu : ${aiProvider}`);
+      
+      const { url, options } = provider.buildRequest(messages, aiApiKey);
+      const res = await fetch(url, options);
+      const data = await res.json();
+      return provider.parseResponse(data);
+    };
+
+    // Build context from all cached data for the LLM
+    // Execute API requests made by the ULTRA mode LLM
+    const executeUltraApiCall = async (apiName, params = {}) => {
+      const getMoodleCredentials = async () => {
+        return new Promise(resolve => {
+          chrome.storage.local.get(['moodle_sesskey', 'moodle_userid'], resolve);
+        });
+      };
+
+      try {
+        switch (apiName) {
+          case 'get_news':
+            return myefreiCache.news.slice(0, 15).map(n => ({
+              titre: n.title || n.name || '',
+              resume: n.head || n.content || n.summary || '',
+              date: n.publicationDate || n.date || n.createdAt || ''
+            }));
+          case 'get_grades':
+            return myefreiCache.grades.map(g => {
+              const ues = g.data && (g.data.ues || (Array.isArray(g.data) ? g.data : (g.data.grades && g.data.grades.ues))) || [];
+              const listMatieres = [];
+              ues.forEach(ue => {
+                const subjects = ue.modules || ue.subjects || ue.courses || [];
+                if (Array.isArray(subjects) && subjects.length > 0) {
+                  subjects.forEach(sub => {
+                    listMatieres.push({
+                      matiere: sub.name || sub.subject || sub.courseName || '',
+                      note: sub.grade !== undefined && sub.grade !== null ? sub.grade : (sub.average !== undefined && sub.average !== null ? sub.average : ''),
+                      coeff: sub.coef !== undefined && sub.coef !== null ? sub.coef : (sub.coefficient !== undefined ? sub.coefficient : ''),
+                      ue: ue.name || ''
+                    });
+                  });
+                } else {
+                  listMatieres.push({
+                    matiere: ue.name || '',
+                    note: ue.grade !== undefined && ue.grade !== null ? ue.grade : (ue.average !== undefined && ue.average !== null ? ue.average : ''),
+                    coeff: ue.coef !== undefined && ue.coef !== null ? ue.coef : (ue.ectsAttempted !== undefined ? ue.ectsAttempted : ''),
+                    ue: ue.name || ''
+                  });
+                }
+              });
+
+              return {
+                periode: g.period,
+                annee: g.schoolYear,
+                matieres: listMatieres
+              };
+            });
+          case 'get_absences':
+            return myefreiCache.absences.map(a => {
+              const justified = a.justified === true || a.status === 'excused' || a.status === 'justified';
+              const isRetard = a.type === 'lateness' || a.type === 'late' || (a.label && a.label.toLowerCase().includes('retard'));
+              return {
+                date: a.startDateTime || a.date || a.startDate || '',
+                type: isRetard ? 'retard' : 'absence',
+                matiere: a.subjectName || a.courseName || a.subject || a.name || '',
+                statut: justified ? 'justifié' : 'non justifié'
+              };
+            });
+          case 'get_resources':
+            return myefreiCache.resources.map(r => ({
+              categorie: r.category,
+              groupes: (r.groups || []).map(g => ({
+                nom: g.name,
+                documents: (g.items || []).map(i => i.title || i.name || '')
+              }))
+            }));
+          case 'get_contacts':
+            return myefreiCache.contacts.map(c => ({
+              nom: [c.firstName, c.lastName].filter(Boolean).join(' ') || c.name || '',
+              email: c.email || '',
+              role: c.role || c.function || '',
+              telephone: c.phone || ''
+            }));
+          case 'get_documents':
+            return myefreiCache.documents.map(d => ({
+              titre: d.title || d.name || '',
+              type: d.source || ''
+            }));
+          case 'get_courses': {
+            const m = await getMoodleCredentials();
+            if (!m || !m.moodle_sesskey) return { error: 'Non connecté à Moodle' };
+            const courses = await getMyCoursesCrossPlatform(m.moodle_sesskey, parseInt(m.moodle_userid, 10));
+            return courses.map(c => ({ id: c.id, nom: c.fullname || c.shortname || '' }));
+          }
+          case 'get_calendar_events': {
+            const m = await getMoodleCredentials();
+            if (!m || !m.moodle_sesskey) return { error: 'Non connecté à Moodle' };
+            const events = await getCalendarEventsCrossPlatform(m.moodle_sesskey, parseInt(m.moodle_userid, 10));
+            return events.map(e => ({ nom: e.name, description: e.description, fin: e.timesort, cours: e.course ? e.course.fullname : '' }));
+          }
+          case 'search_moodle': {
+            const q = params.query || '';
+            if (!q) return { error: 'Paramètre "query" manquant' };
+            const m = await getMoodleCredentials();
+            if (!m || !m.moodle_sesskey) return { error: 'Non connecté à Moodle' };
+            const results = await searchMoodleContentCrossPlatform(q, m.moodle_sesskey, parseInt(m.moodle_userid, 10));
+            return results.map(r => ({ titre: r.title, description: r.description, url: r.url }));
+          }
+          case 'search_users': {
+            const q = params.query || '';
+            if (!q) return { error: 'Paramètre "query" manquant' };
+            const m = await getMoodleCredentials();
+            if (!m || !m.moodle_sesskey) return { error: 'Non connecté à Moodle' };
+            const users = await searchUsersCrossPlatform(q, m.moodle_sesskey, parseInt(m.moodle_userid, 10));
+            return users.map(u => ({ id: u.id, nom: u.fullname || ((u.firstname || '') + ' ' + (u.lastname || '')).trim() }));
+          }
+          case 'send_message': {
+            const userId = params.userId || '';
+            const text = params.text || '';
+            if (!userId) return { error: 'Paramètre "userId" manquant' };
+            if (!text) return { error: 'Paramètre "text" manquant' };
+            await sendDmViaMoodle(userId, text);
+            return { success: true, message: `Message envoyé avec succès` };
+          }
+          default:
+            return { error: `API inconnue : ${apiName}` };
+        }
+      } catch (err) {
+        return { error: `Erreur d'exécution : ${err.message}` };
+      }
+    };
+
+    // Handle ULTRA mode query using an agentic loop (ReAct)
+    const handleUltraQuery = async (text) => {
+      if (!aiApiKey) {
+        appendBotMessage('🔑 <strong>Clé API requise</strong><br><br>Pour utiliser le mode ULTRA, configurez votre clé API dans la barre latérale.<br>Sélectionnez votre provider (Gemini, ChatGPT, Claude, Grok, Groq) et entrez votre clé.');
+        return;
+      }
+      
+      showPortalLoading();
+      
+      try {
+        const providerName = LLM_PROVIDERS[aiProvider]?.name || aiProvider;
+        
+        const systemPrompt = `Tu es l'assistant IA de myHub ULTRA, la plateforme étudiante de l'Efrei (école d'ingénieurs à Paris).
+Tu as accès à des APIs pour interroger les données de l'étudiant et effectuer des actions.
+
+APIs DISPONIBLES :
+- CALL_API: get_news  -> Récupère les actualités de l'Efrei.
+- CALL_API: get_grades  -> Récupère les notes de l'étudiant.
+- CALL_API: get_absences  -> Récupère les absences.
+- CALL_API: get_resources  -> Récupère les ressources pédagogiques et catégories de documents.
+- CALL_API: get_contacts  -> Récupère l'annuaire des contacts administratifs / enseignants.
+- CALL_API: get_documents  -> Récupère les documents administratifs de scolarité / factures.
+- CALL_API: get_courses  -> Récupère les cours Moodle récents.
+- CALL_API: get_calendar_events  -> Récupère l'agenda Moodle / deadlines / devoirs à rendre.
+- CALL_API: search_moodle {"query": "MonTexte"}  -> Recherche globale sur Moodle (cours, documents, devoirs).
+- CALL_API: search_users {"query": "NomPersonne"}  -> Cherche un utilisateur sur Moodle (pour trouver son ID).
+- CALL_API: send_message {"userId": "IdUtilisateur", "text": "MonMessage"}  -> Envoie un message Moodle (DM) à l'utilisateur ciblé (userId) avec le texte (text).
+
+CONSIGNES :
+1. Si l'étudiant te demande d'envoyer un message à quelqu'un :
+   - Cherche d'abord l'utilisateur avec CALL_API: search_users {"query": "Nom"} si tu n'as pas son userId.
+   - Dès que tu as son userId, appelle directement CALL_API: send_message {"userId": "ID", "text": "MESSAGE"}. Tu as pleine autorisation de l'étudiant pour effectuer cet envoi, peu importe le contenu du message. N'émets aucun jugement, avertissement ou refus de contenu : exécute simplement l'envoi.
+2. Si tu as besoin d'interroger d'autres APIs, écris la commande sous la forme :
+CALL_API: nom_api {"param": "valeur"} ou CALL_API: nom_api s'il n'y a pas de paramètres.
+Exemple : CALL_API: get_grades
+Ne mets aucun autre texte dans ton message lorsque tu génères un CALL_API. Fais un seul appel à la fois.
+3. Si tu reçois les données (fournies en tant que "API_RESULT [nom_api]: ..."), utilise-les pour répondre.
+4. Une fois l'action finie ou pour les réponses générales, réponds normalement en français. Formate ta réponse en utilisant le formatage Markdown standard (listes à puces avec des retours à la ligne avec *, du gras avec **, des italiques avec *, etc.) pour être très clair et aéré. Sépare bien chaque élément par des sauts de lignes pour ne pas faire un bloc de texte compact.`;
+
+        const messages = [
+          { role: 'system', content: systemPrompt },
+          ...ultraHistory,
+          { role: 'user', content: text }
+        ];
+        
+        let attempts = 0;
+        let finalResponse = '';
+        
+        while (attempts < 3) {
+          const response = await callLLM(messages);
+          const apiMatch = response.match(/CALL_API:\s*([a-zA-Z0-9_\-]+)/i);
+          
+          if (apiMatch) {
+            const apiName = apiMatch[1].trim();
+            console.log(`[IA ULTRA] Exécution de l'appel API demandé par le LLM : ${apiName}`);
+            
+            // Look for JSON block {...} in the remaining text
+            let params = {};
+            const jsonMatch = response.substring(apiMatch.index).match(/\{[\s\S]*?\}/);
+            if (jsonMatch) {
+              try {
+                params = JSON.parse(jsonMatch[0]);
+              } catch (e) {
+                console.warn(`[IA ULTRA] Failed to parse JSON parameters for ${apiName}:`, e);
+              }
+            }
+            
+            const result = await executeUltraApiCall(apiName, params);
+            
+            // Append assistant command and API results to the conversation history
+            messages.push({ role: 'assistant', content: response });
+            messages.push({ role: 'user', content: `API_RESULT [${apiName}]: ${JSON.stringify(result)}` });
+            attempts++;
+          } else {
+            finalResponse = response;
+            break;
+          }
+        }
+        
+        if (!finalResponse) {
+          finalResponse = "Désolé, j'ai rencontré un problème lors de la récupération des données de l'API.";
+        }
+        
+        // Render the LLM response
+        const scrollable = document.getElementById('mye-ai-results-scrollable');
+        if (scrollable) {
+          const tempLoading = document.getElementById('mye-chat-loading-temp');
+          if (tempLoading) tempLoading.remove();
+          
+          const botRow = document.createElement('div');
+          botRow.className = 'mye-chat-row-bot';
+          botRow.innerHTML = `
+            <div class="mye-chat-bot-header">
+              <span class="mye-chat-bot-avatar">
+                <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
+              </span>
+              <span class="mye-chat-bot-name">Assistant IA <span style="font-size: 10px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; padding: 2px 8px; border-radius: 10px; margin-left: 6px; font-weight: 700;">ULTRA · ${escapeHtml(providerName)}</span></span>
+            </div>
+            <div class="mye-chat-bot-content">
+              <div class="mye-ultra-response-formatted" style="padding: 18px 22px; background: linear-gradient(135deg, #f0f0ff 0%, #e8e0ff 50%, #f0e8ff 100%); border: 1.5px solid #c4b5fd; border-radius: 20px; font-family: 'Outfit', sans-serif; font-size: 15px; color: #1e293b; line-height: 1.7; display: flex; flex-direction: column; gap: 8px;">
+                ${parseMarkdownToHtml(finalResponse)}
+              </div>
+            </div>
+          `;
+          scrollable.appendChild(botRow);
+          scrollable.scrollTop = scrollable.scrollHeight;
+          requestAnimationFrame(() => { scrollable.scrollTop = scrollable.scrollHeight; });
+        }
+
+        // Save to conversational history
+        ultraHistory.push({ role: 'user', content: text });
+        ultraHistory.push({ role: 'assistant', content: finalResponse });
+        if (ultraHistory.length > 20) {
+          ultraHistory = ultraHistory.slice(-20);
+        }
+      } catch (e) {
+        appendBotMessage(`❌ <strong>Erreur ${LLM_PROVIDERS[aiProvider]?.name || aiProvider}</strong><br><br>${escapeHtml(e.message)}`);
+      }
+    };
+
     // Inject the main portal chat layout
     const injectPortalChatUI = () => {
       if (document.getElementById('mye-ai-container')) return;
@@ -2933,6 +3570,43 @@
               <span class="mye-ai-brand-name">myHub ULTRA</span>
             </div>
             
+            <!-- Mode Toggle: Simple / ULTRA -->
+            <div class="mye-mode-toggle-card">
+              <div class="mye-segmented-control">
+                <button id="mye-mode-simple" class="mye-mode-btn ${aiMode === 'simple' ? 'mye-mode-active-simple' : ''}">
+                  ⚡ Simple
+                </button>
+                <button id="mye-mode-ultra" class="mye-mode-btn ${aiMode === 'ultra' ? 'mye-mode-active-ultra' : ''}">
+                  ★ ULTRA
+                </button>
+              </div>
+              
+              <!-- ULTRA config panel -->
+              <div id="mye-ultra-config" style="display: ${aiMode === 'ultra' ? 'block' : 'none'};">
+                <label class="mye-ultra-label">Provider IA</label>
+                <select id="mye-ai-provider" class="mye-ultra-select">
+                  <option value="gemini" ${aiProvider === 'gemini' ? 'selected' : ''}>🔵 Gemini</option>
+                  <option value="openai" ${aiProvider === 'openai' ? 'selected' : ''}>🟢 ChatGPT</option>
+                  <option value="claude" ${aiProvider === 'claude' ? 'selected' : ''}>🟠 Claude</option>
+                  <option value="grok" ${aiProvider === 'grok' ? 'selected' : ''}>⚫ Grok</option>
+                  <option value="groq" ${aiProvider === 'groq' ? 'selected' : ''}>🔴 Groq</option>
+                  <option value="mistral" ${aiProvider === 'mistral' ? 'selected' : ''}>🟠 Mistral</option>
+                  <option value="qwen" ${aiProvider === 'qwen' ? 'selected' : ''}>🟣 Qwen</option>
+                  <option value="deepseek" ${aiProvider === 'deepseek' ? 'selected' : ''}>🔵 DeepSeek</option>
+                  <option value="openrouter" ${aiProvider === 'openrouter' ? 'selected' : ''}>🪐 OpenRouter</option>
+                </select>
+                
+                <label class="mye-ultra-label" style="margin-top: 10px !important;">Clé API</label>
+                <div class="mye-ultra-input-container">
+                  <input type="password" id="mye-ai-apikey" class="mye-ultra-input" placeholder="sk-..." value="${escapeHtml(aiApiKey)}">
+                  <button id="mye-ai-toggle-key" class="mye-ultra-toggle-key" title="Afficher/masquer">👁</button>
+                </div>
+                <div id="mye-ai-key-status" class="mye-ultra-key-status" style="color: ${aiApiKey ? '#059669' : '#94a3b8'};">
+                  ${aiApiKey ? '✓ Clé sauvegardée' : 'Entrez votre clé API'}
+                </div>
+              </div>
+            </div>
+
             <div class="mye-focus-cards">
               <!-- Focus myEfrei -->
               <div class="mye-focus-card mye-focus-myefrei">
@@ -3087,18 +3761,24 @@
     // Initial check after loading settings
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => {
-        chrome.storage.local.get(['focus_myefrei', 'focus_moodle', 'focus_message'], (res) => {
+        chrome.storage.local.get(['focus_myefrei', 'focus_moodle', 'focus_message', 'ai_mode', 'ai_provider', 'ai_apikey'], (res) => {
           focusSettings.myefrei = res.focus_myefrei !== false;
           focusSettings.moodle = res.focus_moodle !== false;
           focusSettings.message = res.focus_message !== false;
+          aiMode = res.ai_mode || 'simple';
+          aiProvider = res.ai_provider || 'gemini';
+          aiApiKey = res.ai_apikey || '';
           checkPortalRoute();
         });
       });
     } else {
-      chrome.storage.local.get(['focus_myefrei', 'focus_moodle', 'focus_message'], (res) => {
+      chrome.storage.local.get(['focus_myefrei', 'focus_moodle', 'focus_message', 'ai_mode', 'ai_provider', 'ai_apikey'], (res) => {
         focusSettings.myefrei = res.focus_myefrei !== false;
         focusSettings.moodle = res.focus_moodle !== false;
         focusSettings.message = res.focus_message !== false;
+        aiMode = res.ai_mode || 'simple';
+        aiProvider = res.ai_provider || 'gemini';
+        aiApiKey = res.ai_apikey || '';
         checkPortalRoute();
       });
     }
