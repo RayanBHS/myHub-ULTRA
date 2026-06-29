@@ -867,41 +867,59 @@ input:checked + .mye-ai-slider:before {
   width: 100% !important;
   max-width: 620px !important;
   position: relative !important;
-  margin-bottom: 0 !important;
+}
+.mye-ai-landing .mye-ai-search-box {
+  margin: 0 auto 40px auto !important; /* Centered with bottom margin on welcome screen */
+}
+.mye-ai-bottom-container .mye-ai-search-box {
+  margin-bottom: 0 !important; /* No bottom margin inside chat bar */
 }
 
-#mye-ai-search-input {
+#mye-ai-search-input-landing,
+#mye-ai-search-input-bottom {
   width: 100% !important;
   height: 64px !important;
   background-color: #ffffff !important;
   border: 3.5px solid #000000 !important; /* Thick black border */
   border-radius: 50px !important;
-  padding: 0 64px 0 28px !important;
   font-size: 20px !important;
   color: #000000 !important;
   outline: none !important;
   box-sizing: border-box !important;
-  text-align: left !important; /* Left-aligned search typing */
   font-family: 'Outfit', 'Segoe UI', system-ui, sans-serif !important;
   transition: box-shadow 0.2s ease !important;
 }
 
-.ultramoodle-dark #mye-ai-search-input {
+#mye-ai-search-input-landing {
+  padding: 0 64px !important; /* Centered text padding */
+  text-align: center !important; /* Centered typing on welcome screen */
+}
+
+#mye-ai-search-input-bottom {
+  padding: 0 64px 0 28px !important; /* Left-aligned typing padding */
+  text-align: left !important; /* Left-aligned typing inside bottom bar */
+}
+
+.ultramoodle-dark #mye-ai-search-input-landing,
+.ultramoodle-dark #mye-ai-search-input-bottom {
   background-color: #1e1e1e !important;
   border-color: #ffffff !important;
   color: #ffffff !important;
 }
 
-#mye-ai-search-input::placeholder {
+#mye-ai-search-input-landing::placeholder,
+#mye-ai-search-input-bottom::placeholder {
   color: #888888 !important;
   opacity: 1 !important;
 }
 
-#mye-ai-search-input:focus {
+#mye-ai-search-input-landing:focus,
+#mye-ai-search-input-bottom:focus {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08) !important;
 }
 
-#mye-ai-search-submit {
+#mye-ai-search-submit-landing,
+#mye-ai-search-submit-bottom {
   position: absolute !important;
   top: 50% !important;
   right: 10px !important;
@@ -920,16 +938,19 @@ input:checked + .mye-ai-slider:before {
   padding: 0 !important;
 }
 
-.ultramoodle-dark #mye-ai-search-submit {
+.ultramoodle-dark #mye-ai-search-submit-landing,
+.ultramoodle-dark #mye-ai-search-submit-bottom {
   background-color: #ffffff !important;
   color: #000000 !important;
 }
 
-#mye-ai-search-submit:hover {
+#mye-ai-search-submit-landing:hover,
+#mye-ai-search-submit-bottom:hover {
   transform: translateY(-50%) scale(1.05) !important;
 }
 
-#mye-ai-search-submit svg {
+#mye-ai-search-submit-landing svg,
+#mye-ai-search-submit-bottom svg {
   width: 20px !important;
   height: 20px !important;
 }
@@ -1284,4 +1305,140 @@ input:checked + .mye-ai-slider:before {
 .mye-chat-bot-content .mye-portal-result:last-child {
   margin-bottom: 0 !important;
 }
+
+/* Collapsible news details panel */
+.mye-news-details summary::-webkit-details-marker {
+  display: none !important;
+}
+.mye-news-details summary {
+  list-style: none !important;
+  outline: none !important;
+}
+.mye-news-details[open] summary svg {
+  transform: rotate(180deg) !important;
+}
+.mye-news-details summary svg {
+  transition: transform 0.2s ease !important;
+}
+
+/* myHub Chatbot Bot Avatar Image */
+.mye-chat-bot-avatar-img {
+  width: 20px !important;
+  height: 20px !important;
+  object-fit: contain !important;
+  border-radius: 4px !important;
+}
+
+/* Gemini-style Liquid Bouncing Orbs Loader */
+.mye-gemini-loader {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 12px !important;
+  padding: 12px 0 !important;
+  height: 36px !important;
+}
+
+.mye-gemini-orb {
+  height: 14px !important;
+  width: 14px !important;
+  border-radius: 50% !important;
+  opacity: 0.85 !important;
+}
+
+/* Orb 1: Warm Orange/Red (from the orange logo gradient) */
+.mye-gemini-orb:nth-child(1) {
+  background: linear-gradient(135deg, #ff7e5f 0%, #feb47b 100%) !important;
+  box-shadow: 0 0 10px rgba(254, 180, 123, 0.4) !important;
+  animation: mye-gemini-bounce-orange 1.2s infinite ease-in-out !important;
+  animation-delay: 0s !important;
+}
+
+/* Orb 2: Fresh Mint/Green (from the green logo gradient) */
+.mye-gemini-orb:nth-child(2) {
+  background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%) !important;
+  box-shadow: 0 0 10px rgba(56, 239, 125, 0.4) !important;
+  animation: mye-gemini-bounce-green 1.2s infinite ease-in-out !important;
+  animation-delay: 0.15s !important;
+}
+
+/* Orb 3: Vibrant Cyan/Blue (from the blue logo gradient) */
+.mye-gemini-orb:nth-child(3) {
+  background: linear-gradient(135deg, #00c6ff 0%, #0072ff 100%) !important;
+  box-shadow: 0 0 10px rgba(0, 114, 255, 0.4) !important;
+  animation: mye-gemini-bounce-blue 1.2s infinite ease-in-out !important;
+  animation-delay: 0.3s !important;
+}
+
+@keyframes mye-gemini-bounce-orange {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 10px rgba(254, 180, 123, 0.4) !important;
+    border-radius: 50% !important;
+    opacity: 0.85;
+  }
+  50% {
+    transform: translateY(-10px) scale(1.25);
+    box-shadow: 0 0 22px rgba(255, 126, 95, 0.8) !important;
+    border-radius: 42% 58% 50% 50% / 50% 50% 42% 58% !important;
+    opacity: 1;
+  }
+}
+
+@keyframes mye-gemini-bounce-green {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 10px rgba(56, 239, 125, 0.4) !important;
+    border-radius: 50% !important;
+    opacity: 0.85;
+  }
+  50% {
+    transform: translateY(-10px) scale(1.25);
+    box-shadow: 0 0 22px rgba(56, 239, 125, 0.8) !important;
+    border-radius: 42% 58% 50% 50% / 50% 50% 42% 58% !important;
+    opacity: 1;
+  }
+}
+
+@keyframes mye-gemini-bounce-blue {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 10px rgba(0, 114, 255, 0.4) !important;
+    border-radius: 50% !important;
+    opacity: 0.85;
+  }
+  50% {
+    transform: translateY(-10px) scale(1.25);
+    box-shadow: 0 0 22px rgba(0, 198, 255, 0.8) !important;
+    border-radius: 42% 58% 50% 50% / 50% 50% 42% 58% !important;
+    opacity: 1;
+  }
+}
+
+/* Inline DM Form Styling */
+.mye-inline-dm-form {
+  animation: mye-card-in 0.2s ease-out both !important;
+}
+
+.mye-inline-dm-textarea:focus {
+  border-color: #ef4444 !important;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15) !important;
+}
+
+.mye-inline-dm-send:hover {
+  background-color: #dc2626 !important;
+}
+
+.mye-inline-dm-cancel:hover {
+  background-color: rgba(100, 116, 139, 0.05) !important;
+  border-radius: 6px !important;
+}
+
+/* Spinner rotation */
+@keyframes mye-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
 

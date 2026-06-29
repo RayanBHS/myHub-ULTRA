@@ -840,7 +840,19 @@
   // ── MYEFREI PORTAL ENTRYPOINT LOGIC (Full Page Chatbot in /racywama/ai) ──
   // ═════════════════════════════════════════════════════════════════════════
   else {
-    // Local preloaded database cache
+
+
+    
+    const MOODLE_ORIGIN = 'https://moodle.myefrei.fr';
+    
+    // Focus settings
+    let focusSettings = {
+      myefrei: true,
+      moodle: true,
+      message: true
+    };
+
+    // Preloaded database cache
     let myefreiCache = {
       myefreiLoaded: false,
       myefreiLoading: false,
@@ -851,15 +863,29 @@
       absences: [],
       documents: [],
       contacts: [],
-      resources: []
+      resources: [],
+      news: []
     };
+
+    // Conversational context state
+    let lastSearchType = '';
+    let newsOffset = 0;
+    
+    // DM conversation state machine
+    // States: null, 'awaiting_recipient', 'awaiting_message'
+    let dmState = null;
+    let dmSelectedUser = null; // { id, name, email }
+    
+    const myhubLogoUrl = chrome.runtime.getURL('img/logoMyHub.png');
+
+    
 
     // Preload MyEfrei (Grades, Absences, Documents, Resources)
     const preloadMyEfrei = async () => {
       if (!focusSettings.myefrei) return;
       if (myefreiCache.myefreiLoaded || myefreiCache.myefreiLoading) return;
       myefreiCache.myefreiLoading = true;
-      console.log('[IA Portal] Synchronizing MyEfrei database in background...');
+      console.log('[IA Chatbot] Synchronizing MyEfrei database in background...');
       try {
         // 1. Periods
         const periodsRes = await fetch('/api/rest/student/periods?withHistory=true');
@@ -930,6 +956,57 @@
           })
           .catch(() => {});
 
+        // 5. News / Announcements (Fetch multiple pages for a rich local database)
+        let newsData = [];
+        try {
+          const pages = [0, 1, 2];
+          const pagePromises = pages.map(page => 
+            fetch(`/api/rest/common/news?page=${page}`)
+              .then(r => r.ok ? r.json() : null)
+              .then(data => {
+                if (data && Array.isArray(data.data)) {
+                  return data.data;
+                } else if (data && Array.isArray(data)) {
+                  return data;
+                }
+                return [];
+              })
+              .catch(() => [])
+          );
+          const results = await Promise.all(pagePromises);
+          newsData = results.flat();
+        } catch (e) {
+          console.warn('[IA Chatbot] Failed to preload common news pages, trying fallbacks...', e);
+        }
+
+        if (newsData.length === 0) {
+          const newsEndpoints = [
+            '/api/rest/student/announcements',
+            '/api/rest/student/news',
+            '/api/rest/common/news',
+            '/api/rest/student/dashboard/announcements'
+          ];
+          for (const ep of newsEndpoints) {
+            try {
+              let res = await fetch(`${ep}?size=100&limit=100&pageSize=100`);
+              if (!res.ok) {
+                res = await fetch(ep);
+              }
+              if (res.ok) {
+                const data = await res.json();
+                if (data) {
+                  const arr = Array.isArray(data) ? data : (data.content || data.data || data.items || data.announcements || []);
+                  if (arr.length > 0) {
+                    newsData = arr;
+                    break;
+                  }
+                }
+              }
+            } catch(e) {}
+          }
+        }
+        myefreiCache.news = newsData;
+
         await Promise.all([
           Promise.all(gradesPromises),
           Promise.all(absencesPromises),
@@ -945,10 +1022,10 @@
 
         myefreiCache.myefreiLoaded = true;
         myefreiCache.myefreiLoading = false;
-        console.log('[IA Portal] MyEfrei cache populated successfully!');
+        console.log('[IA Chatbot] MyEfrei cache populated successfully!');
       } catch (err) {
         myefreiCache.myefreiLoading = false;
-        console.error('[IA Portal] Preloading MyEfrei failed:', err);
+        console.error('[IA Chatbot] Preloading MyEfrei failed:', err);
       }
     };
 
@@ -957,21 +1034,57 @@
       if (!focusSettings.message) return;
       if (myefreiCache.messageLoaded || myefreiCache.messageLoading) return;
       myefreiCache.messageLoading = true;
-      console.log('[IA Portal] Synchronizing Message (Contacts) database in background...');
+      console.log('[IA Chatbot] Synchronizing Message (Contacts) database in background...');
       try {
         const contactsRes = await fetch('/api/rest/student/contacts');
         const data = contactsRes.ok ? await contactsRes.json() : [];
         myefreiCache.contacts = Array.isArray(data) ? data : [];
         myefreiCache.messageLoaded = true;
         myefreiCache.messageLoading = false;
-        console.log('[IA Portal] Message cache populated successfully!');
+        console.log('[IA Chatbot] Message cache populated successfully!');
       } catch (err) {
         myefreiCache.messageLoading = false;
-        console.error('[IA Portal] Preloading Contacts failed:', err);
+        console.error('[IA Chatbot] Preloading Contacts failed:', err);
       }
     };
 
-    // ── Moodle AJAX callers from MyEfrei origin (delegated via service worker) ──
+    // Helper to fetch via Background script (cross-origin bypass for Moodle)
+    const fetchViaBackground = (url, options) => {
+      return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({ action: 'fetch', url, options }, (response) => {
+          if (chrome.runtime.lastError) {
+            return reject(new Error(chrome.runtime.lastError.message));
+          }
+          if (response && response.success) {
+            resolve(response.data);
+          } else {
+            reject(new Error((response && response.error) || 'Failed to fetch via background'));
+          }
+        });
+      });
+    };
+
+    // Moodle AJAX call via background service worker
+    const callMoodleAjaxCrossPlatform = async (methodname, args, sesskey, userid) => {
+      const url = `${MOODLE_ORIGIN}/lib/ajax/service.php?sesskey=${sesskey}&info=${methodname}`;
+      try {
+        const responseData = await fetchViaBackground(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify([{ index: 0, methodname, args }])
+        });
+        if (!responseData || !responseData[0]) throw new Error('Invalid AJAX response format');
+        if (responseData[0].error) {
+          const ex = responseData[0].exception;
+          throw new Error(ex ? (typeof ex === 'object' ? (ex.message || JSON.stringify(ex)) : ex) : 'Moodle AJAX exception');
+        }
+        return responseData[0].data;
+      } catch (e) {
+        throw new Error(`Moodle AJAX failed via background proxy: ${e.message}`);
+      }
+    };
+
+    // Moodle cross-platform actions
     const getMyCoursesCrossPlatform = async (sesskey, userid) => {
       try {
         return await callMoodleAjaxCrossPlatform('core_course_get_recent_courses', { userid }, sesskey, userid);
@@ -1020,21 +1133,178 @@
     };
 
     const searchUsersCrossPlatform = async (query, sesskey, userid) => {
+      // Primary: core_message_message_search_users (the real working Moodle endpoint)
       try {
-        const data = await callMoodleAjaxCrossPlatform('core_user_search_identity', { query, capabilities: [] }, sesskey, userid);
-        return (data && data.list) ? data.list : [];
-      } catch {
-        try {
-          const data2 = await callMoodleAjaxCrossPlatform('core_message_search_users', { userid, search: query, limitfrom: 0, limitnum: 10 }, sesskey, userid);
-          return [...(data2.contacts || []), ...(data2.noncontacts || [])];
-        } catch { return []; }
+        const data = await callMoodleAjaxCrossPlatform('core_message_message_search_users', { userid, search: query, limitfrom: 0, limitnum: 10 }, sesskey, userid);
+        const contacts = (data && data.contacts) ? data.contacts : [];
+        const noncontacts = (data && data.noncontacts) ? data.noncontacts : [];
+        if (contacts.length > 0 || noncontacts.length > 0) {
+          return [...contacts, ...noncontacts];
+        }
+      } catch (e) {
+        console.log('[IA Search] core_message_message_search_users failed, trying fallbacks...', e);
       }
+      // Fallback 1: core_message_search_users
+      try {
+        const data2 = await callMoodleAjaxCrossPlatform('core_message_search_users', { userid, search: query, limitfrom: 0, limitnum: 10 }, sesskey, userid);
+        const c2 = (data2 && data2.contacts) ? data2.contacts : [];
+        const nc2 = (data2 && data2.noncontacts) ? data2.noncontacts : [];
+        if (c2.length > 0 || nc2.length > 0) return [...c2, ...nc2];
+      } catch {}
+      // Fallback 2: core_user_search_identity
+      try {
+        const data3 = await callMoodleAjaxCrossPlatform('core_user_search_identity', { query, capabilities: [] }, sesskey, userid);
+        return (data3 && data3.list) ? data3.list : [];
+      } catch { return []; }
     };
 
-    // ── Moodle Deep Search Engine (Cross-platform variant) ────────────────
+    // Algorithmic string utilities
+    const normalizeStr = (s) => {
+      if (!s) return '';
+      let norm = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      norm = norm.replace(/([a-z])\s+(\d)/g, '$1$2').replace(/(\d)\s+([a-z])/g, '$1$2');
+      return norm.replace(/[^a-z0-9\s]/g, ' ').trim();
+    };
+
+    const cleanCourseTitle = (fullname) => {
+      if (!fullname) return '';
+      const cleanRegex = /^\s*\*?\s*([A-Z0-9]+(?:-[A-Z0-9]+)*)\s*(?:-|\u2013|\u2014)\s*/i;
+      return fullname.replace(cleanRegex, '').replace(/\s*\([^)]*\)\s*$/g, '').trim() || fullname;
+    };
+
+    const levenshtein = (a, b) => {
+      const m = a.length, n = b.length;
+      const dp = Array.from({length: m + 1}, (_, i) => Array.from({length: n + 1}, (_, j) => i === 0 ? j : j === 0 ? i : 0));
+      for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+          dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+        }
+      }
+      return dp[m][n];
+    };
+
+    const fuzzyScore = (query, target) => {
+      if (!query || !target) return 0;
+      const q = normalizeStr(query);
+      const t = normalizeStr(target);
+      if (!q || !t) return 0;
+
+      const synonymGroups = [
+        ["ce", "controle ecrit"],
+        ["de", "dst", "devoir ecrit", "devoir sur table"],
+        ["qcm", "question a choix multiple", "questionnaire a choix multiples", "choix multiples"],
+        ["cm", "cours magistral"],
+        ["td", "travaux diriges", "travail dirige"],
+        ["tp", "travaux pratiques", "experience"],
+        ["cc", "controle continu"]
+      ];
+
+      const hasTerm = (str, term) => {
+        let idx = -1;
+        while ((idx = str.indexOf(term, idx + 1)) !== -1) {
+          const before = idx === 0 || str[idx - 1] === ' ';
+          if (before) {
+            const nextChar = str[idx + term.length];
+            const isEnd = nextChar === undefined;
+            const isSpace = nextChar === ' ';
+            const isDigit = nextChar >= '0' && nextChar <= '9';
+            if (isEnd || isSpace || isDigit) {
+              if (term === "de" || term === "ce") {
+                if (idx === 0 || isEnd || isDigit) return true;
+              } else {
+                return true;
+              }
+            }
+          }
+        }
+        return false;
+      };
+
+      for (const group of synonymGroups) {
+        let qMatched = null, tMatched = null;
+        for (const item of group) {
+          if (!qMatched && hasTerm(q, item)) qMatched = item;
+          if (!tMatched && hasTerm(t, item)) tMatched = item;
+        }
+        if (qMatched && tMatched && qMatched !== tMatched) return 0.95;
+      }
+
+      const montrealGroup = [
+        "montreal", "concordia", "concordia university",
+        "quebec", "yul", "hec montreal", "mcgill", "uqam", "vieux montreal",
+        "plateau mont royal", "guy concordia", "loyola campus", "sgw campus"
+      ];
+      const torontoGroup = [
+        "toronto", "ilac",
+        "ontario", "yyz", "gta", "greater toronto area", "ilac international college",
+        "cn tower", "north york", "downtown toronto"
+      ];
+
+      const qHasMontreal = montrealGroup.some(item => hasTerm(q, item));
+      const tHasMontreal = montrealGroup.some(item => hasTerm(t, item));
+      const qHasToronto  = torontoGroup.some(item => hasTerm(q, item));
+      const tHasToronto  = torontoGroup.some(item => hasTerm(t, item));
+      const hasConflict  = (qHasMontreal && tHasToronto) || (qHasToronto && tHasMontreal);
+
+      if (!hasConflict) {
+        const canadaGroup = ["canada", ...montrealGroup, ...torontoGroup];
+        if (canadaGroup.some(i => hasTerm(q, i)) && canadaGroup.some(i => hasTerm(t, i))) return 0.95;
+      }
+
+      const destinationGroups = [
+        ["etats unis","usa","us","united states","irvine","uci","california","californie","university of california irvine","orange county","oc","socal","southern california","los angeles","la","lax","anteaters"],
+        ["hongrie","budapest","essca","hungary","bud","danube","bme","corvinus","essca school of management","pest","buda","europe centrale"],
+        ["pologne","varsovie","warsaw","agh","agh university","poland","waw","cracovie","krakow","malopolska","mazovie","vistule","agh university of science and technology"],
+        ["republique tcheque","tchequie","tcheque","ostrava","vsb","tuo","vsb tuo","czech","czech republic","czechia","boheme","moravie","silesie","prague","prg","moravian silesian","poruba"],
+        ["malaisie","kuala lumpur","kuala lampur","apu","asia pacific university","malaysia","kl","kul","klcc","selangor","bukit jalil","petronas","asie du sud est"],
+        ["afrique du sud","south africa","cput","cape peninsula","za","cpt","cape town","le cap","western cape","peninsule du cap","bellville","district six"],
+        ["inde","india","mahe","manipal","bom","del","karnataka","manipal academy of higher education","udupi","bangalore","bengaluru"],
+        ["chine","china","seu","southeast university","nanjing","nankin","jiangsu","pkin","shanghai","pvg","nkg"],
+        ["angleterre","uk","royaume uni","united kingdom","staffordshire","england","gb","great britain","stoke on trent","midlands","west midlands","lhr","london"]
+      ];
+
+      for (const group of destinationGroups) {
+        if (group.some(i => hasTerm(q, i)) && group.some(i => hasTerm(t, i))) return 0.95;
+      }
+
+      if (t === q) return 1;
+      const isShort = q.length <= 3;
+      const matchesSafeSubstring = isShort ? t.split(/\s+/).some(w => w.startsWith(q)) : t.includes(q);
+      if (matchesSafeSubstring) return 0.95;
+
+      const qStripped = q.replace(/\s+/g, '');
+      const tStripped = t.replace(/\s+/g, '');
+      if (qStripped && tStripped && qStripped === tStripped) return 0.90;
+
+      const stopWords = new Set(['quand','est','ce','que','je','j','aurais','ai','un','une','des','le','la','les','du','de','en','pour','mes','mon','ma','ta','tes','son','ses','nous','vous','ils','elles','sont','ont','y','a','t','il','elle','dans','avec','par','sur','pour','qui','quoi','dont','ou','comment','pourquoi','quel','quels','quelle','quelles','c','d','l','s','m','t','n']);
+      const qWordsRaw = q.split(/\s+/).filter(Boolean);
+      const qWordsFiltered = qWordsRaw.filter(w => !stopWords.has(w));
+      const qWords = qWordsFiltered.length > 0 ? qWordsFiltered : qWordsRaw;
+      const tWords = t.split(/\s+/).filter(Boolean);
+      let wordHits = 0;
+      for (const qw of qWords) {
+        for (const tw of tWords) {
+          const maxLen = Math.max(qw.length, tw.length);
+          if (maxLen === 0) continue;
+          const dist = levenshtein(qw, tw);
+          const threshold = qw.length <= 3 ? 0 : qw.length <= 5 ? 1 : qw.length <= 8 ? 2 : 3;
+          const isPrefixMatch = qw.length >= 2 && tw.length >= 2 && (tw.startsWith(qw) || (tw.length >= 3 && qw.startsWith(tw)));
+          const isSubstrMatch = qw.length >= 4 && tw.length >= 4 && (tw.includes(qw) || qw.includes(tw));
+          if (dist <= threshold || isPrefixMatch || isSubstrMatch) { wordHits++; break; }
+        }
+      }
+      if (wordHits === qWords.length) return 0.8;
+      if (wordHits > 0) return 0.4 + (wordHits / qWords.length) * 0.3;
+      const dist = levenshtein(q, t.substring(0, Math.min(t.length, q.length + 10)));
+      const norm = dist / Math.max(q.length, 1);
+      return norm <= 0.4 ? Math.max(0, 0.4 - norm) : 0;
+    };
+
+    const MATCH_THRESHOLD = 0.5;
+
+    // Moodle Deep Search Engine (Cross-platform variant)
     const deepSearchMoodleCrossPlatform = async (query, sesskey, userid) => {
       const results = [];
-      const origin = 'https://moodle.myefrei.fr';
       let allCourses = await getMyCoursesCrossPlatform(sesskey, userid);
       const normQuery = normalizeStr(query);
 
@@ -1112,7 +1382,7 @@
         courseHits.sort((a, b) => b._score - a._score);
       }
       for (const c of courseHits.slice(0, 4)) {
-        results.push({ type: 'course', icon: '📚', title: cleanCourseTitle(c.fullname), subtitle: c.shortname || c.fullname, url: `${origin}/course/view.php?id=${c.id}`, score: c._score });
+        results.push({ type: 'course', icon: '📚', title: cleanCourseTitle(c.fullname), subtitle: c.shortname || c.fullname, url: `${MOODLE_ORIGIN}/course/view.php?id=${c.id}`, score: c._score });
       }
 
       try {
@@ -1152,7 +1422,7 @@
             results.push({
               type: 'deadline', icon: '📅', title: evName,
               subtitle: `${cleanCourseTitle(courseName)} • À rendre : ${dateStr}`,
-              url: ev.url || ev.viewurl || `${origin}/calendar/view.php?view=day&time=${ev.timesort}`,
+              url: ev.url || ev.viewurl || `${MOODLE_ORIGIN}/calendar/view.php?view=day&time=${ev.timesort}`,
               score: isScopedSearch ? 0.90 + (score * 0.09) : Math.max(score, 0.4) + 0.15
             });
           }
@@ -1213,7 +1483,7 @@
             secScore = Math.max(fuzzyScore(searchQ, secName), fuzzyScore(searchQ, `${course.fullname} ${secName}`) * 0.8);
           } else { secScore = 0.5; }
           if ((secScore >= MATCH_THRESHOLD || isScopedSearch) && secName) {
-            results.push({ type: 'section', icon: '📂', title: secName, subtitle: `Section dans : ${cleanCourseTitle(course.fullname)}`, url: `${origin}/course/view.php?id=${course.id}#section-${section.section}`, score: isScopedSearch ? 0.90 + (secScore * 0.09) : secScore });
+            results.push({ type: 'section', icon: '📂', title: secName, subtitle: `Section dans : ${cleanCourseTitle(course.fullname)}`, url: `${MOODLE_ORIGIN}/course/view.php?id=${course.id}#section-${section.section}`, score: isScopedSearch ? 0.90 + (secScore * 0.09) : secScore });
           }
           if (!section.modules) continue;
           for (const mod of section.modules) {
@@ -1225,7 +1495,7 @@
             if (isDevoirsIntent && mod.modname === 'assign') modScore = 0.98;
             else if (isQuizIntent && mod.modname === 'quiz') modScore = 0.98;
             if (modScore >= MATCH_THRESHOLD || (isDevoirsIntent && mod.modname === 'assign') || (isQuizIntent && mod.modname === 'quiz')) {
-              results.push({ type: mod.modname || 'module', icon: moduleTypeIcon(mod), title: modName, subtitle: `${cleanCourseTitle(course.fullname)}${secName ? ' › ' + secName : ''}`, url: mod.url || `${origin}/course/view.php?id=${course.id}`, score: isScopedSearch ? 0.90 + (modScore * 0.09) : modScore });
+              results.push({ type: mod.modname || 'module', icon: moduleTypeIcon(mod), title: modName, subtitle: `${cleanCourseTitle(course.fullname)}${secName ? ' › ' + secName : ''}`, url: mod.url || `${MOODLE_ORIGIN}/course/view.php?id=${course.id}`, score: isScopedSearch ? 0.90 + (modScore * 0.09) : modScore });
             }
             if (!mod.contents || !Array.isArray(mod.contents)) continue;
             for (const file of mod.contents) {
@@ -1247,7 +1517,7 @@
               if (fileScore >= MATCH_THRESHOLD || (isFilesIntent && isTargetCourseFile)) {
                 const ext = (fname.split('.').pop() || '').toLowerCase();
                 const fileIcon = ext === 'pdf' ? '📕' : ['doc','docx'].includes(ext) ? '📘' : ['xls','xlsx'].includes(ext) ? '📗' : ['ppt','pptx'].includes(ext) ? '📙' : ['zip','rar','7z'].includes(ext) ? '🗜️' : ['mp4','avi','mkv','mov'].includes(ext) ? '🎥' : ['mp3','wav','ogg'].includes(ext) ? '🎵' : ['jpg','jpeg','png','gif','svg'].includes(ext) ? '🖼️' : ['py','js','java','c','cpp','html','css'].includes(ext) ? '💻' : '📄';
-                results.push({ type: 'file', icon: fileIcon, title: fname, subtitle: `${cleanCourseTitle(course.fullname)} › ${modName}${secName ? ' › ' + secName : ''}`, url: file.fileurl || mod.url || `${origin}/course/view.php?id=${course.id}`, score: isScopedSearch ? 0.90 + (fileScore * 0.09) : fileScore, ext });
+                results.push({ type: 'file', icon: fileIcon, title: fname, subtitle: `${cleanCourseTitle(course.fullname)} › ${modName}${secName ? ' › ' + secName : ''}`, url: file.fileurl || mod.url || `${MOODLE_ORIGIN}/course/view.php?id=${course.id}`, score: isScopedSearch ? 0.90 + (fileScore * 0.09) : fileScore, ext });
               }
             }
           }
@@ -1260,7 +1530,7 @@
           for (const u of userHits.slice(0, 2)) {
             const fullname = u.fullname || ((u.firstname || '') + ' ' + (u.lastname || '')).trim();
             if (!fullname) continue;
-            results.push({ type: 'user', icon: '👤', title: fullname, subtitle: u.email || '', url: `${origin}/user/profile.php?id=${u.id}`, score: fuzzyScore(query, fullname) + 0.1 });
+            results.push({ type: 'user', icon: '👤', title: fullname, subtitle: u.email || '', url: `${MOODLE_ORIGIN}/user/profile.php?id=${u.id}`, score: fuzzyScore(query, fullname) + 0.1, userId: u.id });
           }
         } catch (e) {}
       }
@@ -1273,11 +1543,18 @@
         .slice(0, 4);
     };
 
-    // ── Unified Search Engine (MyEfrei database + Moodle cross-platform fallback) ──
+    // Unified Search Engine (MyEfrei database + Moodle cross-platform fallback)
     const searchMyEfreiAndMoodle = async (query) => {
       const results = [];
-      const normQuery = normalizeStr(query);
+      let normQuery = normalizeStr(query);
       if (!normQuery) return [];
+
+      // Strip direct messaging intents
+      const dmRegex = /^(?:envoyer\s+un\s+dm\s+a\s+|envoyer\s+un\s+message\s+a\s+|envoyer\s+un\s+dm\s+|envoyer\s+un\s+message\s+|dm\s+a\s+|message\s+a\s+)(.+)$/i;
+      const match = normQuery.match(dmRegex);
+      if (match && match[1] && match[1].trim()) {
+        query = match[1].trim();
+      }
 
       // A. Search MyEfrei Grades
       if (focusSettings.myefrei && myefreiCache.grades.length > 0) {
@@ -1295,7 +1572,7 @@
                   title: `Moyenne UE : ${ueName}`,
                   subtitle: `Semestre ${periodObj.period} (${periodObj.schoolYear}) • Coef: ${ue.coef || ue.ectsAttempted || 1}`,
                   url: '/portal/student/grades',
-                  score: Math.min(ueScore + 0.15, 1.0), // Boosted priority for grades
+                  score: Math.min(ueScore + 0.15, 1.0),
                   meta: { average: avgVal != null ? `${avgVal}/20` : 'Non noté' }
                 });
               }
@@ -1313,7 +1590,7 @@
                       title: subName,
                       subtitle: `Matière dans l'UE : ${ueName} (${periodObj.period})`,
                       url: '/portal/student/grades',
-                      score: Math.min(subScore + 0.15, 1.0), // Boosted priority for grades
+                      score: Math.min(subScore + 0.15, 1.0),
                       meta: { average: average != null ? `${average}/20` : 'Non noté' }
                     });
                   }
@@ -1351,7 +1628,7 @@
             title: `${isRetard ? 'Retard' : 'Absence'} : ${item.moduleName || item.courseName || item.course || item.subject || 'Cours'}`,
             subtitle: `${formattedDate} • ${justified ? 'Excusé(e)' : 'Non excusé(e)'}`,
             url: '/portal/student/absences',
-            score: normQuery.includes('absence') || normQuery.includes('retard') ? 0.95 : Math.min(score + 0.15, 1.0), // Boosted priority for absences
+            score: normQuery.includes('absence') || normQuery.includes('retard') ? 0.95 : Math.min(score + 0.15, 1.0),
             meta: { justified }
           });
         });
@@ -1372,7 +1649,7 @@
               title: doc.title,
               subtitle: `${doc.category || 'Scolarité'} • Téléchargement`,
               url: downloadUrl,
-              score: Math.min(score + 0.15, 1.0), // Boosted priority for documents
+              score: Math.min(score + 0.15, 1.0),
               isDownload: true
             });
           }
@@ -1387,13 +1664,14 @@
           contacts.forEach(c => {
             const score = Math.max(fuzzyScore(query, c.title || ''), fuzzyScore(query, c.jobTitle || ''), fuzzyScore(query, catTitle) * 0.7);
             if (score >= 0.5) {
+              const absoluteUrl = c.link ? (c.link.startsWith('/') ? c.link : c.link) : '';
               results.push({
                 type: 'mye-contact',
                 icon: c.type === 'staff' ? '👤' : '🏢',
                 title: c.title,
                 subtitle: `${c.jobTitle || 'Service'} • ${catTitle}`,
-                url: c.link || '',
-                score: score * 0.7, // Reduced priority for contacts
+                url: absoluteUrl,
+                score: score * 0.7,
                 meta: { email: c.email || '', phone: c.phone || '', azureId: c.azureId || '', isStaff: c.type === 'staff' }
               });
             }
@@ -1415,12 +1693,47 @@
                   title: rTitle,
                   subtitle: `Ressources › ${cat.category} › ${group.name}`,
                   url: `/api/rest/common/resources/${resItem._id}/file`,
-                  score: score * 0.65, // Reduced priority for resources
+                  score: score * 0.65,
                   isDownload: true
                 });
               }
             });
           });
+        });
+      }
+
+      // E.2. Search News / Announcements
+      if (focusSettings.myefrei && Array.isArray(myefreiCache.news) && myefreiCache.news.length > 0) {
+        const isNewsQuery = normQuery.includes('news') || normQuery.includes('actualit') || normQuery.includes('annonce') || normQuery.includes('actu');
+        
+        // Sort a copy of news chronologically (latest first) to assign scores properly
+        const chronoNews = [...myefreiCache.news].sort((a, b) => {
+          const dateA = new Date(a.date || a.createdAt || a.publishDate || a.publishedAt || a.publicationDate || 0).getTime();
+          const dateB = new Date(b.date || b.createdAt || b.publishDate || b.publishedAt || b.publicationDate || 0).getTime();
+          return dateB - dateA;
+        });
+
+        chronoNews.forEach((item, index) => {
+          const title = item.title || item.subject || item.header || '';
+          const content = item.content || item.body || item.text || item.description || item.head || '';
+          let score = Math.max(fuzzyScore(query, title), fuzzyScore(query, content) * 0.7);
+          
+          if (isNewsQuery) {
+            // Assign a high score starting from 0.9 and decreasing slightly to maintain chronological order in results
+            score = Math.max(score, 0.9 - (index * 0.01));
+          }
+          
+          if (score >= 0.5) {
+            results.push({
+              type: 'mye-news',
+              icon: '📰',
+              title: title,
+              subtitle: content.replace(/<[^>]*>/g, '').substring(0, 120) + (content.length > 120 ? '...' : ''),
+              url: item.link || item.url || (`/portal/student/home#news-${item.id || item._id || ''}`),
+              score: score,
+              meta: item
+            });
+          }
         });
       }
 
@@ -1451,18 +1764,56 @@
         .slice(0, 6);
     };
 
-    // ── MyEfrei Render results HTML ──────────────────────────────────────────
+    // MyEfrei Render results HTML
     const myeRenderResults = (results, query) => {
       const normQuery = normalizeStr(query);
       let aiSummaryHTML = '';
 
       if (focusSettings.myefrei) {
-        const hasNotesKeyword = normQuery.includes('note') || normQuery.includes('grade') || normQuery.includes('moyenne') || normQuery.includes('bulletin') || normQuery.includes('resultat');
-        const hasAbsenceKeyword = normQuery.includes('absence') || normQuery.includes('absent') || normQuery.includes('retard') || normQuery.includes('manqu') || normQuery.includes('justif');
-        const hasDocsKeyword = normQuery.includes('document') || normQuery.includes('facture') || normQuery.includes('attestation') || normQuery.includes('justificatif') || normQuery.includes('schooling') || normQuery.includes('legacy');
-        const hasContactsKeyword = normQuery.includes('contact') || normQuery.includes('prof') || normQuery.includes('enseignant') || normQuery.includes('scolarite') || normQuery.includes('administration') || normQuery.includes('mail') || normQuery.includes('telephone');
-        const hasResourcesKeyword = normQuery.includes('ressource') || normQuery.includes('wifi') || normQuery.includes('logiciel') || normQuery.includes('outils') || normQuery.includes('bibliotheque') || normQuery.includes('lien') || normQuery.includes('utile');
-        const hasMoodleKeyword = normQuery.includes('moodle') || normQuery.includes('devoir') || normQuery.includes('deadline') || normQuery.includes('echeance') || normQuery.includes('travail') || normQuery.includes('cours');
+        const hasNotesKeyword = normQuery.includes('note') || normQuery.includes('grade') || normQuery.includes('moyenne') || normQuery.includes('bulletin') || normQuery.includes('resultat') || normQuery.includes('combien') || results.some(r => r.type === 'mye-grade-ue' || r.type === 'mye-grade-subject');
+        const hasAbsenceKeyword = normQuery.includes('absence') || normQuery.includes('absent') || normQuery.includes('retard') || normQuery.includes('manqu') || normQuery.includes('justif') || results.some(r => r.type === 'mye-absence');
+        const hasDocsKeyword = normQuery.includes('document') || normQuery.includes('facture') || normQuery.includes('attestation') || normQuery.includes('justificatif') || normQuery.includes('schooling') || normQuery.includes('legacy') || results.some(r => r.type === 'mye-document');
+        const hasContactsKeyword = normQuery.includes('contact') || normQuery.includes('prof') || normQuery.includes('enseignant') || normQuery.includes('scolarite') || normQuery.includes('administration') || normQuery.includes('mail') || normQuery.includes('telephone') || results.some(r => r.type === 'mye-contact');
+        const hasResourcesKeyword = normQuery.includes('ressource') || normQuery.includes('wifi') || normQuery.includes('logiciel') || normQuery.includes('outils') || normQuery.includes('bibliotheque') || normQuery.includes('lien') || normQuery.includes('utile') || results.some(r => r.type === 'mye-resource');
+        const hasMoodleKeyword = normQuery.includes('moodle') || normQuery.includes('devoir') || normQuery.includes('deadline') || normQuery.includes('echeance') || normQuery.includes('travail') || normQuery.includes('cours') || results.some(r => ['course', 'deadline', 'file', 'activity', 'section', 'module'].includes(r.type));
+        
+        const wantsMore = normQuery.includes('plus') || 
+                          normQuery.includes('more') || 
+                          normQuery.includes('tout') || 
+                          normQuery.includes('liste') || 
+                          normQuery.includes('suiv') || 
+                          normQuery.includes('autr') || 
+                          normQuery.includes('ancien') || 
+                          normQuery.includes('suite') || 
+                          normQuery.includes('encore') || 
+                          normQuery.includes('next');
+
+        let hasNewsKeyword = normQuery.includes('news') || normQuery.includes('actualit') || normQuery.includes('annonce') || normQuery.includes('actu');
+        
+        const isPagination = wantsMore && lastSearchType === 'news';
+        if (hasNewsKeyword && !isPagination) {
+          newsOffset = 0;
+        }
+
+        if (isPagination && !hasNotesKeyword && !hasAbsenceKeyword && !hasDocsKeyword && !hasContactsKeyword && !hasResourcesKeyword && !hasMoodleKeyword) {
+          hasNewsKeyword = true;
+        }
+
+        if (hasNotesKeyword) {
+          lastSearchType = 'grades';
+        } else if (hasAbsenceKeyword) {
+          lastSearchType = 'absences';
+        } else if (hasNewsKeyword) {
+          lastSearchType = 'news';
+        } else if (hasDocsKeyword) {
+          lastSearchType = 'documents';
+        } else if (hasContactsKeyword) {
+          lastSearchType = 'contacts';
+        } else if (hasMoodleKeyword) {
+          lastSearchType = 'moodle';
+        } else if (hasResourcesKeyword) {
+          lastSearchType = 'resources';
+        }
 
         if (hasNotesKeyword) {
           let notesText = "";
@@ -1476,8 +1827,9 @@
 
           const cleanSubjectQuery = (q) => {
             return q
-              .replace(/\b(notes?|grades?|moyennes?|bulletins?|resultats?|evaluations?|devoirs?|controles?|examens?|evals?|donne|moi|ma|mon|mes|le|la|les|du|de|un|une|generale|g|semestres?|s\d+)\b/g, '')
-              .replace(/\b(au|aux|en|dans|de|du|d')\b/g, '')
+              .replace(/(j|d|l|c)'/gi, ' ')
+              .replace(/\b(notes?|grades?|moyennes?|bulletins?|resultats?|evaluations?|devoirs?|controles?|examens?|evals?|donne|moi|ma|mon|mes|le|la|les|du|de|un|une|generale|g|semestres?|s\d+|combien|ai|eu|a|pour|sur|en|quelle|quel|quels|quelles|ma|mon|mes|ta|ton|tes|sa|son|ses|notre|votre|leur|leurs|c|t|m|s|d|l)\b/g, '')
+              .replace(/\b(au|aux|en|dans|de|du|d'|en)\b/g, '')
               .replace(/\d+/g, '')
               .replace(/\s+/g, ' ')
               .trim();
@@ -1537,31 +1889,53 @@
             const latestPeriod = sortedGrades[0];
 
             if (latestPeriod) {
-              let generalAverage = null;
-              if (latestPeriod.data) {
-                const d = latestPeriod.data;
-                if (d.average != null) generalAverage = d.average;
-                else if (d.generalAverage != null) generalAverage = d.generalAverage;
-                else if (d.grades) {
-                  if (d.grades.average != null) generalAverage = d.grades.average;
-                  else if (d.grades.generalAverage != null) generalAverage = d.grades.generalAverage;
-                }
-              }
-
               const ues = latestPeriod.data && (latestPeriod.data.ues || (Array.isArray(latestPeriod.data) ? latestPeriod.data : (latestPeriod.data.grades && latestPeriod.data.grades.ues)));
-              
-              if (generalAverage == null && Array.isArray(ues)) {
-                let sum = 0;
-                let count = 0;
+              let generalAverage = null;
+
+              if (Array.isArray(ues)) {
+                let totalWeightedSum = 0;
+                let totalCoef = 0;
+                let fallbackSum = 0;
+                let fallbackCoef = 0;
+
                 ues.forEach(ue => {
-                  const ueGrade = ue.grade != null ? ue.grade : (ue.average != null ? ue.average : null);
-                  if (ueGrade != null) {
-                    sum += ueGrade;
-                    count++;
+                  let ueAverage = ue.grade != null ? parseFloat(ue.grade) : (ue.average != null ? parseFloat(ue.average) : null);
+                  if (isNaN(ueAverage)) ueAverage = null;
+                  
+                  const subjects = ue.modules || ue.subjects || ue.courses || [];
+                  if (ueAverage == null && Array.isArray(subjects) && subjects.length > 0) {
+                    let subSum = 0;
+                    let subCoefSum = 0;
+                    subjects.forEach(sub => {
+                      let subGrade = sub.grade != null ? parseFloat(sub.grade) : (sub.average != null ? parseFloat(sub.average) : null);
+                      if (!isNaN(subGrade) && subGrade != null) {
+                        const subCoef = sub.coef != null ? parseFloat(sub.coef) : (sub.coefficient != null ? parseFloat(sub.coefficient) : 1.0);
+                        subSum += subGrade * subCoef;
+                        subCoefSum += subCoef;
+                      }
+                    });
+                    if (subCoefSum > 0) {
+                      ueAverage = subSum / subCoefSum;
+                    }
+                  }
+
+                  if (ueAverage != null) {
+                    const ueCoef = ue.coef != null ? parseFloat(ue.coef) : (ue.ectsAttempted != null ? parseFloat(ue.ectsAttempted) : 1.0);
+                    
+                    if (subjects.length >= 2) {
+                      totalWeightedSum += ueAverage * ueCoef;
+                      totalCoef += ueCoef;
+                    }
+                    
+                    fallbackSum += ueAverage * ueCoef;
+                    fallbackCoef += ueCoef;
                   }
                 });
-                if (count > 0) {
-                  generalAverage = sum / count;
+
+                if (totalCoef > 0) {
+                  generalAverage = totalWeightedSum / totalCoef;
+                } else if (fallbackCoef > 0) {
+                  generalAverage = fallbackSum / fallbackCoef;
                 }
               }
 
@@ -1609,7 +1983,7 @@
           aiSummaryHTML = `
             <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
               <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                <span style="font-size: 20px;">🤖</span>
+                <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
                 <strong style="color: #4f46e5; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Assistant IA</strong>
               </div>
               <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
@@ -1658,7 +2032,7 @@
           aiSummaryHTML = `
             <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
               <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                <span style="font-size: 20px;">🤖</span>
+                <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
                 <strong style="color: #4f46e5; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Assistant IA</strong>
               </div>
               <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
@@ -1704,7 +2078,7 @@
           aiSummaryHTML = `
             <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
               <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                <span style="font-size: 20px;">🤖</span>
+                <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
                 <strong style="color: #4f46e5; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Assistant IA</strong>
               </div>
               <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
@@ -1737,7 +2111,7 @@
           aiSummaryHTML = `
             <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
               <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                <span style="font-size: 20px;">🤖</span>
+                <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
                 <strong style="color: #4f46e5; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Assistant IA</strong>
               </div>
               <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
@@ -1781,11 +2155,72 @@
           aiSummaryHTML = `
             <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
               <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                <span style="font-size: 20px;">🤖</span>
+                <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
                 <strong style="color: #4f46e5; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Assistant IA</strong>
               </div>
               <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
                 ${contactsText}
+              </div>
+            </div>
+          `;
+        }
+        else if (hasNewsKeyword) {
+          let newsText = "";
+          if (Array.isArray(myefreiCache.news) && myefreiCache.news.length > 0) {
+            const sortedNews = [...myefreiCache.news].sort((a, b) => {
+              const dateA = new Date(a.date || a.createdAt || a.publishDate || a.publishedAt || a.publicationDate || 0);
+              const dateB = new Date(b.date || b.createdAt || b.publishDate || b.publishedAt || b.publicationDate || 0);
+              return dateB - dateA;
+            });
+
+            const isPagination = wantsMore && lastSearchType === 'news';
+            if (!isPagination) {
+              newsOffset = 0;
+            }
+
+            const startIdx = newsOffset;
+            const endIdx = startIdx + 3;
+
+            if (startIdx >= sortedNews.length) {
+              newsText = `<div style="color: #64748b; font-style: italic;">Il n'y a plus d'actualités disponibles dans MyEfrei.</div>`;
+            } else {
+              const topNews = sortedNews.slice(startIdx, endIdx);
+              newsOffset = Math.min(endIdx, sortedNews.length);
+              
+              const titleText = isPagination ? "Voici les actualités suivantes de l'Efrei :" : "Voici les dernières actualités de l'Efrei :";
+              newsText = `<div style="font-weight: 700; color: #1e293b; margin-bottom: 8px;">${titleText}</div>`;
+              
+              topNews.forEach(item => {
+                const title = item.title || item.subject || item.header || 'Sans titre';
+                const dateStr = item.date || item.createdAt || item.publishDate || item.publishedAt || item.publicationDate
+                  ? new Date(item.date || item.createdAt || item.publishDate || item.publishedAt || item.publicationDate).toLocaleDateString('fr-FR')
+                  : '';
+                const url = item.link || item.url || (`/portal/student/home#news-${item.id || item._id || ''}`);
+                
+                newsText += `<div class="mye-ai-summary-module-row" style="padding: 8px 0; display: flex; justify-content: space-between; align-items: center;">
+                  <a href="${url}" target="_blank" style="font-weight: 600; color: #1b4332; text-decoration: none; display: flex; flex-direction: column; flex: 1;">
+                    <span>${title}</span>
+                    ${dateStr ? `<span style="font-size: 11px; color: #16a34a; font-weight: normal; margin-top: 2px;">Publié le ${dateStr}</span>` : ''}
+                  </a>
+                  <a href="${url}" target="_blank" style="color: #16a34a; text-decoration: none; font-size: 13px; font-weight: 600; margin-left: 15px; display: flex; align-items: center; gap: 4px;">
+                    <span>Lire</span>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                  </a>
+                </div>`;
+              });
+            }
+          } else {
+            newsText = `Aucune actualité récente trouvée dans MyEfrei.`;
+          }
+
+          aiSummaryHTML = `
+            <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1.5px solid #bbf7d0; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
+                <strong style="color: #16a34a; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">ASSISTANT IA - ACTUALITÉS</strong>
+              </div>
+              <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
+                ${newsText}
               </div>
             </div>
           `;
@@ -1832,7 +2267,7 @@
           aiSummaryHTML = `
             <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
               <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                <span style="font-size: 20px;">🤖</span>
+                <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
                 <strong style="color: #4f46e5; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Assistant IA</strong>
               </div>
               <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
@@ -1844,7 +2279,22 @@
       }
 
       if (results.length === 0 && !aiSummaryHTML) {
-        return `<div class="ia-no-results">😕 Je n'ai trouvé aucun résultat correspondant dans MyEfrei ou Moodle.</div>`;
+        const hasDmIntent = normQuery.includes('dm') || normQuery.includes('message direct') || normQuery.includes('envoyer un message');
+        if (hasDmIntent) {
+          return `
+            <div class="mye-ai-summary-card" style="background: linear-gradient(135deg, #fee2e2 0%, #fef2f2 100%); border: 1.5px solid #fca5a5; border-radius: 20px; padding: 20px; margin-bottom: 20px; font-family: 'Outfit', sans-serif;">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
+                <strong style="color: #ef4444; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Messagerie Moodle</strong>
+              </div>
+              <div style="font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
+                Pour envoyer un DM Moodle directement depuis cette interface, tapez <strong>"DM à [Nom de votre contact]"</strong> (ex: <em>"DM à Scolarité"</em> ou <em>"DM à Jean Dupont"</em>).<br><br>
+                Vous pouvez également rechercher simplement le nom d'un contact et cliquer sur l'icône de discussion 💬 rouge à côté de sa fiche.
+              </div>
+            </div>
+          `;
+        }
+        return `<div class="ia-no-results">Je n'ai trouvé aucun résultat correspondant dans MyEfrei ou Moodle.</div>`;
       }
 
       const typeLabel = {
@@ -1854,9 +2304,11 @@
         'mye-document': 'Document',
         'mye-contact': 'Contact',
         'mye-resource': 'Ressources',
+        'mye-news': 'Actualité',
         'course': 'Cours Moodle',
         'deadline': 'Deadline Moodle',
-        'file': 'Fichier Moodle'
+        'file': 'Fichier Moodle',
+        'user': 'Utilisateur'
       };
 
       let html = '';
@@ -1874,8 +2326,10 @@
           
           let extraHTML = '';
           let cardHref = r.url;
+          if (r.type === 'mye-contact' || r.type === 'user') {
+            cardHref = 'javascript:void(0);';
+          }
 
-          // Custom render logic based on types
           if (r.type === 'mye-grade-ue' || r.type === 'mye-grade-subject') {
             const avg = r.meta && r.meta.average;
             let color = '#2ecc71';
@@ -1894,10 +2348,15 @@
               if (c.isStaff) {
                 actions += `<a href="https://teams.microsoft.com/l/chat/0/0?users=${encodeURIComponent(c.email)}" target="_blank" class="mye-ai-contact-btn" title="Discuter sur Teams" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: #e0e7ff; color: #4f46e5; margin-left: 5px;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></a>`;
               }
+              actions += `<button class="mye-ai-contact-btn mye-dm-trigger-btn" data-email="${c.email || ''}" data-name="${r.title || ''}" title="Envoyer un DM Moodle" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: #fee2e2; color: #ef4444; border: none; cursor: pointer; margin-left: 5px;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></button>`;
             }
             if (c.phone) {
               actions += `<a href="tel:${c.phone}" class="mye-ai-contact-btn" title="Téléphoner" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: #ecfdf5; color: #059669; margin-left: 5px;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg></a>`;
             }
+            extraHTML = `<div style="display: flex; align-items: center; margin-left: auto;">${actions}</div>`;
+          }
+          else if (r.type === 'user') {
+            let actions = `<button class="mye-ai-contact-btn mye-dm-trigger-btn" data-userid="${r.userId || ''}" data-name="${r.title || ''}" title="Envoyer un DM Moodle" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: #fee2e2; color: #ef4444; border: none; cursor: pointer; margin-left: 5px;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></button>`;
             extraHTML = `<div style="display: flex; align-items: center; margin-left: auto;">${actions}</div>`;
           }
 
@@ -1923,9 +2382,8 @@
       return html;
     };
 
-    // ── Helper to setup UI events on Portal chatbot ─────────────────────────
+    // Helper to setup UI events
     const attachPortalChatEvents = () => {
-      // Toggle switches
       const toggleMyefrei = document.getElementById('mye-toggle-myefrei');
       const toggleMoodle = document.getElementById('mye-toggle-moodle');
       const toggleMessage = document.getElementById('mye-toggle-message');
@@ -1940,7 +2398,6 @@
           focus_message: focusSettings.message
         });
 
-        // Trigger dynamic API call if toggled ON, or clear cache if toggled OFF!
         if (focusSettings.myefrei) {
           preloadMyEfrei();
         } else {
@@ -1949,6 +2406,7 @@
           myefreiCache.absences = [];
           myefreiCache.documents = [];
           myefreiCache.resources = [];
+          myefreiCache.news = [];
           myefreiCache.myefreiLoaded = false;
           myefreiCache.myefreiLoading = false;
         }
@@ -1966,7 +2424,6 @@
       if (toggleMoodle) toggleMoodle.addEventListener('change', saveSettings);
       if (toggleMessage) toggleMessage.addEventListener('change', saveSettings);
 
-      // Exit button
       const exitBtn = document.getElementById('mye-ai-exit-btn');
       if (exitBtn) {
         exitBtn.addEventListener('click', () => {
@@ -1974,12 +2431,13 @@
         });
       }
 
-      // Search input
-      const mainInput = document.getElementById('mye-ai-search-input');
-      const mainSubmit = document.getElementById('mye-ai-search-submit');
+      const landingInput = document.getElementById('mye-ai-search-input-landing');
+      const landingSubmit = document.getElementById('mye-ai-search-submit-landing');
+      const bottomInput = document.getElementById('mye-ai-search-input-bottom');
+      const bottomSubmit = document.getElementById('mye-ai-search-submit-bottom');
       const backBtn = document.getElementById('mye-ai-back-btn');
 
-      const executeSearch = async (text) => {
+      const executeSearch = async (text, isFromBottom = false) => {
         if (!text.trim()) return;
         
         const isLandingVisible = !document.getElementById('mye-ai-landing').classList.contains('mye-hidden');
@@ -1992,38 +2450,291 @@
         }
         
         appendUserMessage(text);
-        showPortalLoading();
         
-        mainInput.value = '';
-        mainInput.focus();
+        if (isFromBottom) {
+          if (bottomInput) { bottomInput.value = ''; bottomInput.focus(); }
+        } else {
+          if (landingInput) { landingInput.value = ''; }
+        }
+
+        // ── DM Conversation State Machine ──
+        const normText = normalizeStr(text);
+        
+        // Match: "envoyer/envoie/envoi un dm/message", "dm", "message", "dm à [nom]", "envoie un dm à [nom]"
+        const dmPatterns = [
+          /^(?:envoyer?|envoi[es]?)\s+(?:un\s+)?(?:dm|message)(?:\s+a\s+(.+))?$/i,
+          /^dm(?:\s+a\s+(.+))?$/i,
+          /^message(?:\s+a\s+(.+))?$/i
+        ];
+        let isDmTrigger = false;
+        let dmAutoRecipient = null;
+        for (const pat of dmPatterns) {
+          const m = normText.match(pat);
+          if (m) {
+            isDmTrigger = true;
+            if (m[1] && m[1].trim()) dmAutoRecipient = m[1].trim();
+            break;
+          }
+        }
+
+        // State: awaiting_recipient — user is typing a name to search
+        if (dmState === 'awaiting_recipient') {
+          showPortalLoading();
+          try {
+            const storage = await new Promise(resolve => {
+              chrome.storage.local.get(['moodle_sesskey', 'moodle_userid'], resolve);
+            });
+            if (!storage || !storage.moodle_sesskey || !storage.moodle_userid) {
+              appendBotMessage('❌ Session Moodle non configurée. Veuillez vous connecter à <a href="https://moodle.myefrei.fr" target="_blank" style="color:#4f46e5;font-weight:700;">Moodle</a> d\'abord.');
+              dmState = null;
+              return;
+            }
+            const users = await searchUsersCrossPlatform(text, storage.moodle_sesskey, parseInt(storage.moodle_userid, 10));
+            if (users.length === 0) {
+              appendBotMessage(`😕 Je n'ai trouvé aucun utilisateur Moodle correspondant à <strong>"${escapeHtml(text)}"</strong>.<br>Essayez un autre nom ou prénom.`);
+              return; // stay in awaiting_recipient
+            }
+            // Show user list with clickable selection (max 3)
+            let html = `<strong>Voici les utilisateurs trouvés :</strong><br><br>`;
+            html += `<div style="display: flex; flex-direction: column; gap: 8px;">`;
+            users.slice(0, 3).forEach(u => {
+              const fullname = u.fullname || ((u.firstname || '') + ' ' + (u.lastname || '')).trim();
+              if (!fullname) return;
+              html += `<button class="mye-dm-select-user" data-userid="${u.id}" data-username="${escapeHtml(fullname)}" style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px; border: 1.5px solid #c7d2fe; background: white; cursor: pointer; text-align: left; font-family: inherit; font-size: 14px; transition: all 0.15s;">
+                <span style="font-size: 20px;">👤</span>
+                <span style="font-weight: 600; color: #1e293b;">${escapeHtml(fullname)}</span>
+              </button>`;
+            });
+            html += `</div>`;
+            html += `<br><div style="font-size: 12px; color: #64748b;">Cliquez sur un utilisateur pour le sélectionner, ou tapez un autre nom pour affiner.</div>`;
+            appendBotMessage(html);
+
+            // Attach click handlers on user buttons
+            setTimeout(() => {
+              document.querySelectorAll('.mye-dm-select-user').forEach(btn => {
+                btn.addEventListener('click', () => {
+                  const userId = btn.dataset.userid;
+                  const userName = btn.dataset.username;
+                  dmSelectedUser = { id: userId, name: userName };
+                  dmState = 'awaiting_message';
+                  appendBotMessage(`Vous avez sélectionné <strong>${escapeHtml(userName)}</strong>.<br><br>💬 Quel message souhaitez-vous lui envoyer ?`);
+                  if (bottomInput) bottomInput.focus();
+                });
+              });
+            }, 100);
+          } catch (e) {
+            appendBotMessage('❌ Erreur lors de la recherche d\'utilisateurs : ' + escapeHtml(e.message));
+            dmState = null;
+          }
+          return;
+        }
+
+        // State: awaiting_message — user is typing a message to send
+        if (dmState === 'awaiting_message' && dmSelectedUser) {
+          showPortalLoading();
+          try {
+            await sendDmViaMoodle(dmSelectedUser.id, text);
+            appendBotMessage(`✅ Message envoyé avec succès à <strong>${escapeHtml(dmSelectedUser.name)}</strong> !`);
+          } catch (e) {
+            appendBotMessage(`❌ Échec de l'envoi : ${escapeHtml(e.message)}`);
+          }
+          dmState = null;
+          dmSelectedUser = null;
+          return;
+        }
+
+        // Detect DM trigger from normal search
+        if (isDmTrigger) {
+          dmState = 'awaiting_recipient';
+          dmSelectedUser = null;
+          
+          // If "DM à [nom]" was typed, auto-search the recipient immediately
+          if (dmAutoRecipient) {
+            appendBotMessage(`📨 <strong>Mode envoi de DM activé</strong><br><br>Recherche de "${escapeHtml(dmAutoRecipient)}"...`);
+            // Re-run executeSearch with just the name, now in awaiting_recipient state
+            await executeSearch(dmAutoRecipient, true);
+          } else {
+            appendBotMessage(`📨 <strong>Mode envoi de DM activé</strong><br><br>À qui souhaitez-vous envoyer un message ?<br>Tapez le nom de la personne.`);
+          }
+          if (bottomInput) bottomInput.focus();
+          return;
+        }
+
+        // ── Normal search flow ──
+        dmState = null;
+        dmSelectedUser = null;
+        showPortalLoading();
 
         try {
           const results = await searchMyEfreiAndMoodle(text);
           renderPortalResults(results, text);
+          if (bottomInput) { bottomInput.focus(); }
         } catch(e) {
           renderPortalError(e.message);
         }
       };
 
-      if (mainSubmit) mainSubmit.addEventListener('click', () => executeSearch(mainInput.value));
-      if (mainInput) mainInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') executeSearch(mainInput.value); });
+      if (landingSubmit) landingSubmit.addEventListener('click', () => executeSearch(landingInput.value, false));
+      if (landingInput) landingInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') executeSearch(landingInput.value, false); });
+
+      if (bottomSubmit) bottomSubmit.addEventListener('click', () => executeSearch(bottomInput.value, true));
+      if (bottomInput) bottomInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') executeSearch(bottomInput.value, true); });
 
       if (backBtn) {
         backBtn.addEventListener('click', () => {
           document.getElementById('mye-ai-results-panel').classList.add('mye-hidden');
           document.getElementById('mye-ai-landing').classList.remove('mye-hidden');
-          mainInput.value = '';
-          mainInput.focus();
+          if (landingInput) {
+            landingInput.value = '';
+            landingInput.focus();
+          }
+          if (bottomInput) {
+            bottomInput.value = '';
+          }
+          lastSearchType = '';
+          newsOffset = 0;
         });
       }
 
-      // Quick links
       document.querySelectorAll('.mye-ai-link-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const query = btn.getAttribute('data-query');
-          executeSearch(query);
+          executeSearch(query, false);
         });
       });
+
+      const scrollable = document.getElementById('mye-ai-results-scrollable');
+      if (scrollable) {
+        scrollable.addEventListener('click', async (e) => {
+          const btn = e.target.closest('.mye-dm-trigger-btn');
+          if (!btn) return;
+          e.preventDefault();
+          e.stopPropagation();
+          
+          btn.disabled = true;
+          const originalContent = btn.innerHTML;
+          btn.innerHTML = `<svg class="mye-spinner" viewBox="0 0 50 50" style="animation: mye-spin 1s linear infinite; width: 16px; height: 16px; display: inline-block; vertical-align: middle;"><circle cx="25" cy="25" r="20" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" style="stroke-dasharray: 80, 200; stroke-dashoffset: 0;"></circle></svg>`;
+          
+          try {
+            let userId = btn.getAttribute('data-userid');
+            const email = btn.getAttribute('data-email');
+            const name = btn.getAttribute('data-name');
+            
+            const storage = await new Promise(resolve => {
+              chrome.storage.local.get(['moodle_sesskey', 'moodle_userid'], resolve);
+            });
+            if (!storage || !storage.moodle_sesskey) {
+              throw new Error("Session Moodle non connectée. Veuillez vous connecter sur Moodle d'abord.");
+            }
+            
+            if (!userId) {
+              const queryToSearch = email || name;
+              if (!queryToSearch) throw new Error("Impossible de trouver les informations du contact.");
+              
+              const users = await searchUsersCrossPlatform(queryToSearch, storage.moodle_sesskey, parseInt(storage.moodle_userid, 10));
+              if (users && users.length > 0) {
+                const match = users.find(u => u.email && u.email.toLowerCase() === email.toLowerCase()) || users[0];
+                userId = match.id;
+              } else {
+                throw new Error("Utilisateur introuvable sur Moodle.");
+              }
+            }
+            
+            const resultCard = btn.closest('.ia-result-card');
+            if (resultCard) {
+              const oldForm = document.querySelector('.mye-inline-dm-form');
+              if (oldForm) oldForm.remove();
+              
+              const dmForm = document.createElement('div');
+              dmForm.className = 'mye-inline-dm-form';
+              dmForm.style.cssText = 'width: 100%; margin-top: 12px; padding: 12px; border-top: 1px solid rgba(0,0,0,0.05); display: flex; flex-direction: column; gap: 8px; box-sizing: border-box;';
+              dmForm.innerHTML = `
+                <textarea placeholder="Saisissez votre message direct..." style="width: 100%; min-height: 60px; padding: 8px 12px; border-radius: 8px; border: 1.5px solid #cbd5e1; outline: none; font-size: 14px; font-family: inherit; resize: vertical; box-sizing: border-box;" class="mye-inline-dm-textarea"></textarea>
+                <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                  <button class="mye-inline-dm-cancel" style="background: transparent; border: none; padding: 6px 12px; font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer;">Annuler</button>
+                  <button class="mye-inline-dm-send" style="background: #ef4444; border: none; border-radius: 6px; padding: 6px 16px; font-size: 13px; font-weight: 600; color: white; cursor: pointer; display: flex; align-items: center; gap: 4px;">Envoyer</button>
+                </div>
+              `;
+              
+              resultCard.appendChild(dmForm);
+              const textarea = dmForm.querySelector('.mye-inline-dm-textarea');
+              if (textarea) textarea.focus();
+              
+              dmForm.querySelector('.mye-inline-dm-cancel').addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dmForm.remove();
+              });
+              
+              dmForm.querySelector('.mye-inline-dm-send').addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const text = textarea.value.trim();
+                if (!text) return;
+                
+                const sendBtn = e.target.closest('.mye-inline-dm-send');
+                sendBtn.disabled = true;
+                sendBtn.innerHTML = 'Envoi...';
+                
+                try {
+                  let sent = false;
+                  // Try to send via conversation id or get conversation between users first
+                  try {
+                    const conv = await callMoodleAjaxCrossPlatform('core_message_get_conversation_between_users', {
+                      userid: parseInt(storage.moodle_userid, 10),
+                      otheruserid: parseInt(userId, 10),
+                      includecontactrequests: true,
+                      includeprivacyinfo: true
+                    }, storage.moodle_sesskey, parseInt(storage.moodle_userid, 10));
+                    
+                    if (conv && conv.id) {
+                      await callMoodleAjaxCrossPlatform('core_message_send_messages_to_conversation', {
+                        conversationid: conv.id,
+                        messages: [
+                          {
+                            text: text,
+                            textformat: 1
+                          }
+                        ]
+                      }, storage.moodle_sesskey, parseInt(storage.moodle_userid, 10));
+                      sent = true;
+                    }
+                  } catch (convErr) {
+                    console.log('[IA DM] Failed with conversation endpoints, trying legacy instant messages...', convErr);
+                  }
+                  
+                  if (!sent) {
+                    // Fallback to legacy core_message_send_instant_messages
+                    await callMoodleAjaxCrossPlatform('core_message_send_instant_messages', {
+                      messages: [
+                        {
+                          touserid: parseInt(userId, 10),
+                          text: text,
+                          textformat: 1 // HTML
+                        }
+                      ]
+                    }, storage.moodle_sesskey, parseInt(storage.moodle_userid, 10));
+                  }
+                  
+                  dmForm.innerHTML = `<div style="color: #10b981; font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 6px; padding: 4px 0;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align: middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> Message envoyé avec succès !</div>`;
+                  setTimeout(() => dmForm.remove(), 2500);
+                } catch (err) {
+                  console.error('[IA DM] Failed to send:', err);
+                  alert("Erreur lors de l'envoi : " + err.message);
+                  sendBtn.disabled = false;
+                  sendBtn.innerHTML = 'Envoyer';
+                }
+              });
+            }
+          } catch (err) {
+            console.error('[IA DM] Resolve user failed:', err);
+            alert("Erreur : " + err.message);
+          } finally {
+            btn.innerHTML = originalContent;
+            btn.disabled = false;
+          }
+        });
+      }
     };
 
     const escapeHtml = (unsafe) => {
@@ -2053,7 +2764,6 @@
     const showPortalLoading = () => {
       const scrollable = document.getElementById('mye-ai-results-scrollable');
       if (scrollable) {
-        // Remove old temp loading row if it exists
         const oldTemp = document.getElementById('mye-chat-loading-temp');
         if (oldTemp) oldTemp.remove();
 
@@ -2062,12 +2772,16 @@
         loadingRow.id = 'mye-chat-loading-temp';
         loadingRow.innerHTML = `
           <div class="mye-chat-bot-header">
-            <span class="mye-chat-bot-avatar">🤖</span>
+            <span class="mye-chat-bot-avatar">
+              <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
+            </span>
             <span class="mye-chat-bot-name">Assistant IA</span>
           </div>
           <div class="mye-chat-bot-content">
-            <div class="ia-typing" style="padding: 12px 16px; width: fit-content;">
-              <span></span><span></span><span></span>
+            <div class="mye-gemini-loader">
+              <div class="mye-gemini-orb"></div>
+              <div class="mye-gemini-orb"></div>
+              <div class="mye-gemini-orb"></div>
             </div>
           </div>
         `;
@@ -2087,7 +2801,9 @@
         botRow.className = 'mye-chat-row-bot';
         botRow.innerHTML = `
           <div class="mye-chat-bot-header">
-            <span class="mye-chat-bot-avatar">🤖</span>
+            <span class="mye-chat-bot-avatar">
+              <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
+            </span>
             <span class="mye-chat-bot-name">Assistant IA</span>
           </div>
           <div class="mye-chat-bot-content">
@@ -2113,7 +2829,9 @@
         botRow.className = 'mye-chat-row-bot';
         botRow.innerHTML = `
           <div class="mye-chat-bot-header">
-            <span class="mye-chat-bot-avatar">🤖</span>
+            <span class="mye-chat-bot-avatar">
+              <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
+            </span>
             <span class="mye-chat-bot-name">Assistant IA</span>
           </div>
           <div class="mye-chat-bot-content">
@@ -2127,7 +2845,74 @@
       }
     };
 
-    // ── Inject the full page Chat UI container ───────────────────────────────
+    // Helper to append a bot text message (for DM conversation flow)
+    const appendBotMessage = (html) => {
+      const scrollable = document.getElementById('mye-ai-results-scrollable');
+      if (scrollable) {
+        const tempLoading = document.getElementById('mye-chat-loading-temp');
+        if (tempLoading) tempLoading.remove();
+
+        const botRow = document.createElement('div');
+        botRow.className = 'mye-chat-row-bot';
+        botRow.innerHTML = `
+          <div class="mye-chat-bot-header">
+            <span class="mye-chat-bot-avatar">
+              <img src="${myhubLogoUrl}" class="mye-chat-bot-avatar-img" alt="myHub">
+            </span>
+            <span class="mye-chat-bot-name">Assistant IA</span>
+          </div>
+          <div class="mye-chat-bot-content">
+            <div style="padding: 16px 20px; background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%); border: 1.5px solid #c7d2fe; border-radius: 20px; font-family: 'Outfit', sans-serif; font-size: 15px; color: #1e293b; line-height: 1.6; font-weight: 500;">
+              ${html}
+            </div>
+          </div>
+        `;
+        scrollable.appendChild(botRow);
+        scrollable.scrollTop = scrollable.scrollHeight;
+        requestAnimationFrame(() => { scrollable.scrollTop = scrollable.scrollHeight; });
+      }
+    };
+
+    // Send DM via Moodle API
+    const sendDmViaMoodle = async (targetUserId, messageText) => {
+      const storage = await new Promise(resolve => {
+        chrome.storage.local.get(['moodle_sesskey', 'moodle_userid'], resolve);
+      });
+      if (!storage || !storage.moodle_sesskey || !storage.moodle_userid) {
+        throw new Error('Session Moodle non configurée. Veuillez vous connecter à Moodle.');
+      }
+      const sesskey = storage.moodle_sesskey;
+      const myUserId = parseInt(storage.moodle_userid, 10);
+
+      let sent = false;
+      // Try conversation API first
+      try {
+        const conv = await callMoodleAjaxCrossPlatform('core_message_get_conversation_between_users', {
+          userid: myUserId,
+          otheruserid: parseInt(targetUserId, 10),
+          includecontactrequests: true,
+          includeprivacyinfo: true
+        }, sesskey, myUserId);
+        
+        if (conv && conv.id) {
+          await callMoodleAjaxCrossPlatform('core_message_send_messages_to_conversation', {
+            conversationid: conv.id,
+            messages: [{ text: messageText, textformat: 1 }]
+          }, sesskey, myUserId);
+          sent = true;
+        }
+      } catch (e) {
+        console.log('[IA DM] Conversation API failed, trying legacy...', e);
+      }
+      
+      if (!sent) {
+        await callMoodleAjaxCrossPlatform('core_message_send_instant_messages', {
+          messages: [{ touserid: parseInt(targetUserId, 10), text: messageText, textformat: 1 }]
+        }, sesskey, myUserId);
+      }
+    };
+
+    // Inject the main portal chat layout
     const injectPortalChatUI = () => {
       if (document.getElementById('mye-ai-container')) return;
 
@@ -2204,10 +2989,17 @@
                 <h1 class="mye-ai-landing-title">BONJOUR</h1>
                 <h2 class="mye-ai-landing-subtitle">Que cherchez vous ?</h2>
                 
+                <div class="mye-ai-search-box">
+                  <input type="text" id="mye-ai-search-input-landing" placeholder="Chercher dans l'univers de l'Efrei">
+                  <button id="mye-ai-search-submit-landing" title="Rechercher">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                  </button>
+                </div>
+
                 <div class="mye-ai-quick-links">
                   <button class="mye-ai-link-btn" data-query="actualités">Actualité</button>
-                  <button class="mye-ai-link-btn" data-query="mes cours">Mes cours</button>
-                  <button class="mye-ai-link-btn" data-query="contacts scolarité">Envoyer un DM</button>
+                  <button class="mye-ai-link-btn" data-query="deadlines">Mes deadlines</button>
+                  <button class="mye-ai-link-btn" data-query="envoyer un DM">Envoyer un DM</button>
                 </div>
               </div>
 
@@ -2222,16 +3014,15 @@
                 <div class="mye-ai-results-scrollable" id="mye-ai-results-scrollable">
                   <!-- Result cards rendered here -->
                 </div>
-              </div>
-            </div>
-
-            <!-- ChatGPT style Bottom search input -->
-            <div class="mye-ai-bottom-container">
-              <div class="mye-ai-search-box">
-                <input type="text" id="mye-ai-search-input" placeholder="Chercher dans l'univers de l'Efrei">
-                <button id="mye-ai-search-submit" title="Rechercher">
-                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                </button>
+                <!-- ChatGPT style Bottom search input -->
+                <div class="mye-ai-bottom-container">
+                  <div class="mye-ai-search-box">
+                    <input type="text" id="mye-ai-search-input-bottom" placeholder="Poser une autre question...">
+                    <button id="mye-ai-search-submit-bottom" title="Rechercher">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -2240,17 +3031,32 @@
 
       document.body.appendChild(container);
 
-      // Attach events
       attachPortalChatEvents();
 
-      // Launch background preloading if enabled
       if (focusSettings.myefrei) preloadMyEfrei();
       if (focusSettings.message) preloadMessage();
     };
 
+    // Theme switching logic (dark/light mode detection)
+    const applyTheme = () => {
+      chrome.storage.local.get(['theme'], (result) => {
+        const isDark = result.theme === 'dark' || (!result.theme && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (isDark) {
+          document.body.classList.remove('ultramoodle-light');
+          document.body.classList.add('ultramoodle-dark');
+        } else {
+          document.body.classList.remove('ultramoodle-dark');
+          document.body.classList.add('ultramoodle-light');
+        }
+      });
+    };
+
+    
     const cleanupPortalChatUI = () => {
       const container = document.getElementById('mye-ai-container');
       if (container) container.remove();
+      lastSearchType = '';
+      newsOffset = 0;
     };
 
     // Route checker for MyEfrei SPA
@@ -2296,6 +3102,73 @@
         checkPortalRoute();
       });
     }
-  }
 
+    // Auto-open news from hash on portal pages
+    const checkHashAndOpenNews = () => {
+      const hash = window.location.hash;
+      if (hash && (hash.startsWith('#news-') || hash.startsWith('#announcement-'))) {
+        const newsId = hash.replace('#news-', '').replace('#announcement-', '');
+        if (!newsId) return;
+
+        console.log(`[IA Portal] URL hash contains news ID: ${newsId}, looking for target element...`);
+
+        const selectors = [
+          `#news-${newsId}`,
+          `#announcement-${newsId}`,
+          `[id*="${newsId}"]`,
+          `[href*="${newsId}"]`,
+          `[data-id*="${newsId}"]`,
+          `[ng-reflect-id*="${newsId}"]`
+        ];
+
+        let targetEl = null;
+        for (const sel of selectors) {
+          try {
+            targetEl = document.querySelector(sel);
+            if (targetEl) break;
+          } catch(e) {}
+        }
+
+        if (!targetEl) {
+          const allElements = document.querySelectorAll('a, button, div.card, div.list-group-item, .announcement, .news-item, .news-card');
+          for (const el of allElements) {
+            for (const attr of el.attributes) {
+              if (attr.value && attr.value.includes(newsId)) {
+                targetEl = el;
+                break;
+              }
+            }
+            if (targetEl) break;
+          }
+        }
+
+        if (targetEl) {
+          console.log('[IA Portal] Target news element found! Scrolling and clicking...', targetEl);
+          targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          
+          setTimeout(() => {
+            targetEl.click();
+            targetEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          }, 300);
+          
+          window.location.hash = '';
+        }
+      }
+    };
+
+    if (window.location.pathname.includes('/portal/student/home') || window.location.pathname === '/' || window.location.pathname.includes('/portal/')) {
+      setTimeout(checkHashAndOpenNews, 1000);
+      setTimeout(checkHashAndOpenNews, 2500);
+      
+      window.addEventListener('hashchange', checkHashAndOpenNews);
+      
+      let checkCount = 0;
+      const observer = new MutationObserver(() => {
+        checkCount++;
+        checkHashAndOpenNews();
+        if (checkCount > 15) observer.disconnect();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+  }
 })();
