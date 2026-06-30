@@ -659,14 +659,26 @@ body.mye-ai-page #mye-custom-header-wrapper {
 }
 
 .mye-ai-bottom-container {
+  position: absolute !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  height: 110px !important;
   display: flex !important;
   justify-content: center !important;
   align-items: center !important;
-  padding: 16px 40px 24px 40px !important;
-  flex-shrink: 0 !important;
-  background-color: transparent !important;
+  padding: 16px 40px 30px 40px !important;
   box-sizing: border-box !important;
   width: 100% !important;
+  z-index: 10 !important;
+  background: linear-gradient(to top, #F0F0F0 70%, rgba(240, 240, 240, 0) 100%) !important;
+  pointer-events: none !important;
+}
+.ultramoodle-dark .mye-ai-bottom-container {
+  background: linear-gradient(to top, #121212 70%, rgba(18, 18, 18, 0) 100%) !important;
+}
+.mye-ai-bottom-container * {
+  pointer-events: auto !important;
 }
 
 /* Card 1: Brand card */
@@ -883,6 +895,7 @@ input:checked + .mye-ai-slider:before {
   border: 3.5px solid #000000 !important; /* Thick black border */
   border-radius: 50px !important;
   font-size: 20px !important;
+  line-height: 24px !important; /* Proper line-height to fit text size */
   color: #000000 !important;
   outline: none !important;
   box-sizing: border-box !important;
@@ -891,12 +904,12 @@ input:checked + .mye-ai-slider:before {
 }
 
 #mye-ai-search-input-landing {
-  padding: 0 64px !important; /* Centered text padding */
+  padding: 16.5px 64px !important; /* Vertically centered text padding */
   text-align: center !important; /* Centered typing on welcome screen */
 }
 
 #mye-ai-search-input-bottom {
-  padding: 0 64px 0 28px !important; /* Left-aligned typing padding */
+  padding: 16.5px 64px 16.5px 28px !important; /* Vertically centered left-aligned padding */
   text-align: left !important; /* Left-aligned typing inside bottom bar */
 }
 
@@ -1007,14 +1020,28 @@ input:checked + .mye-ai-slider:before {
   max-height: 100% !important;
   box-sizing: border-box !important;
   overflow: hidden !important;
+  position: relative !important;
 }
 
 .mye-ai-results-header-row {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  height: 80px !important;
+  padding: 20px 0 0 0 !important;
   display: flex !important;
   align-items: center !important;
   justify-content: space-between !important;
-  margin-bottom: 20px !important;
-  flex-shrink: 0 !important;
+  z-index: 10 !important;
+  background: linear-gradient(to bottom, #F0F0F0 70%, rgba(240, 240, 240, 0) 100%) !important;
+  pointer-events: none !important;
+}
+.ultramoodle-dark .mye-ai-results-header-row {
+  background: linear-gradient(to bottom, #121212 70%, rgba(18, 18, 18, 0) 100%) !important;
+}
+.mye-ai-results-header-row * {
+  pointer-events: auto !important;
 }
 
 .mye-ai-back-btn {
@@ -1096,9 +1123,16 @@ input:checked + .mye-ai-slider:before {
 }
 
 .mye-ai-results-scrollable {
-  flex: 1 !important;
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  height: 100% !important;
+  width: 100% !important;
   overflow-y: auto !important;
-  padding-right: 8px !important;
+  box-sizing: border-box !important;
+  padding: 80px 8px 110px 0 !important;
 }
 
 .mye-ai-results-scrollable::-webkit-scrollbar {

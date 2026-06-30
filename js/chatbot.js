@@ -2332,54 +2332,213 @@
     // Simple markdown-to-HTML parser
     const parseMarkdownToHtml = (md) => {
       if (!md) return '';
-      let html = md;
 
-      // Escape HTML tags to prevent arbitrary HTML injection (allowing bold/italics etc in next steps)
-      html = html.replace(/&/g, '&amp;')
-                 .replace(/</g, '&lt;')
-                 .replace(/>/g, '&gt;');
+      // 1. Escape HTML
+      let html = md.replace(/&/g, '&amp;')
+                   .replace(/</g, '&lt;')
+                   .replace(/>/g, '&gt;');
 
-      // Code blocks: ```code```
-      html = html.replace(/```([\s\S]*?)```/g, '<pre style="background: rgba(0,0,0,0.05); padding: 10px; border-radius: 8px; font-family: monospace; font-size: 13px; overflow-x: auto; margin: 10px 0;">$1</pre>');
+      // 2. Extract code blocks
+      const codeBlocks = [];
+      html = html.replace(/```([\s\S]*?)```/g, (match, code) => {
+        const id = `__CODE_BLOCK_${codeBlocks.length}__`;
+        let cleanCode = code;
+        const firstLineEnd = code.indexOf('\n');
+        if (firstLineEnd !== -1) {
+          const firstLine = code.substring(0, firstLineEnd).trim();
+          if (firstLine && /^[a-zA-Z0-9_-]+$/.test(firstLine)) {
+            cleanCode = code.substring(firstLineEnd + 1);
+          }
+        }
+        cleanCode = cleanCode.trim();
+        codeBlocks.push(`<pre style="background: rgba(0,0,0,0.06); padding: 12px; border-radius: 8px; font-family: 'Consolas', 'Courier New', monospace; font-size: 13px; overflow-x: auto; margin: 10px 0; border: 1px solid rgba(0,0,0,0.1); line-height: 1.4; color: #1e293b;">${cleanCode}</pre>`);
+        return `\n\n${id}\n\n`;
+      });
 
-      // Inline code: `code`
-      html = html.replace(/`(.*?)`/g, '<code style="background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px;">$1</code>');
+      // 3. Normalize newlines
+      html = html.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-      // Bold: **text** or __text__
-      html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-      html = html.replace(/__(.*?)__/g, '<strong>$1</strong>');
-
-      // Italics: *text* or _text_
-      html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
-      html = html.replace(/_(.*?)_/g, '<em>$1</em>');
-
-      // Split lines to construct paragraphs and lists
+      // 4. Split into lines
       const lines = html.split('\n');
+      const output = [];
+      
       let inList = false;
-      const parsedLines = lines.map(line => {
+      let listType = null; // 'ul' or 'ol'
+      
+      // We will parse table blocks by grouping table lines
+      let inTable = false;
+      let tableLines = [];
+
+      const isTableStart = (index) => {
+        if (!lines[index].trim().startsWith('|')) return false;
+        let nextIdx = index + 1;
+        while (nextIdx < lines.length && !lines[nextIdx].trim()) {
+          nextIdx++;
+        }
+        if (nextIdx < lines.length) {
+          const nextTrimmed = lines[nextIdx].trim();
+          return nextTrimmed.startsWith('|') && /^[| -:]+$/.test(nextTrimmed);
+        }
+        return false;
+      };
+
+      const flushTable = () => {
+        if (tableLines.length < 2) {
+          tableLines.forEach(line => {
+            output.push(`<p style="margin: 6px 0; line-height: 1.6;">${inlineParse(line)}</p>`);
+          });
+        } else {
+          let tableHtml = '<div style="overflow-x: auto; margin: 16px 0; border-radius: 12px; border: 1px solid rgba(0,0,0,0.1);"><table style="width: 100%; border-collapse: collapse; font-size: 14px; text-align: left; background: rgba(255,255,255,0.45);">';
+          
+          const parseRow = (line) => {
+            const parts = line.split('|').map(s => s.trim());
+            if (parts[0] === '') parts.shift();
+            if (parts[parts.length - 1] === '') parts.pop();
+            return parts;
+          };
+
+          const headers = parseRow(tableLines[0]);
+          tableHtml += '<thead><tr style="background: rgba(255,255,255,0.5); border-bottom: 2px solid rgba(0,0,0,0.08);">';
+          headers.forEach(h => {
+            tableHtml += `<th style="padding: 10px 14px; font-weight: 700; color: #1e293b;">${inlineParse(h)}</th>`;
+          });
+          tableHtml += '</tr></thead><tbody>';
+
+          for (let i = 2; i < tableLines.length; i++) {
+            const cols = parseRow(tableLines[i]);
+            tableHtml += '<tr style="border-bottom: 1px solid rgba(0,0,0,0.05);">';
+            for (let j = 0; j < headers.length; j++) {
+              tableHtml += `<td style="padding: 10px 14px; color: #1e293b;">${inlineParse(cols[j] || '')}</td>`;
+            }
+            tableHtml += '</tr>';
+          }
+          tableHtml += '</tbody></table></div>';
+          output.push(tableHtml);
+        }
+        tableLines = [];
+        inTable = false;
+      };
+
+      const closeList = () => {
+        if (inList) {
+          output.push(listType === 'ol' ? '</ol>' : '</ul>');
+          inList = false;
+          listType = null;
+        }
+      };
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
         const trimmed = line.trim();
-        if (trimmed.startsWith('* ') || trimmed.startsWith('- ')) {
-          const content = trimmed.substring(2);
-          let prefix = '';
+
+        // 1. Code block placeholder
+        if (/^__CODE_BLOCK_\d+__$/.test(trimmed)) {
+          closeList();
+          if (inTable) flushTable();
+          const index = parseInt(trimmed.match(/\d+/)[0]);
+          output.push(codeBlocks[index]);
+          continue;
+        }
+
+        // 2. Tables
+        if (!inTable && isTableStart(i)) {
+          closeList();
+          inTable = true;
+          tableLines.push(line);
+          continue;
+        }
+
+        if (inTable) {
+          if (trimmed.startsWith('|')) {
+            tableLines.push(line);
+            continue;
+          } else if (!trimmed) {
+            continue;
+          } else {
+            flushTable();
+          }
+        }
+
+        // 3. Empty line
+        if (!trimmed) {
+          closeList();
+          continue;
+        }
+
+        // 4. Horizontal Rule
+        if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+          closeList();
+          output.push('<hr style="border: 0; border-top: 1px solid rgba(0, 0, 0, 0.15); margin: 16px 0;" />');
+          continue;
+        }
+
+        // 5. Headers
+        const headerMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+        if (headerMatch) {
+          closeList();
+          const level = headerMatch[1].length;
+          const content = inlineParse(headerMatch[2]);
+          let fontSize = '18px';
+          let marginTop = '14px';
+          if (level === 1) { fontSize = '22px'; marginTop = '18px'; }
+          else if (level === 2) { fontSize = '20px'; marginTop = '16px'; }
+          else if (level === 3) { fontSize = '18px'; marginTop = '14px'; }
+          else { fontSize = '16px'; marginTop = '12px'; }
+          output.push(`<h${level} style="font-weight: 700; color: #1e293b; margin: ${marginTop} 0 8px 0; font-family: 'Outfit', sans-serif; font-size: ${fontSize}; line-height: 1.3;">${content}</h${level}>`);
+          continue;
+        }
+
+        // 6. Lists
+        const unorderedMatch = trimmed.match(/^(?:\s*[*•-]\s+)(.+)$/);
+        const orderedMatch = trimmed.match(/^(?:\s*(\d+)\.\s+)(.+)$/);
+
+        if (unorderedMatch || orderedMatch) {
+          const currentType = orderedMatch ? 'ol' : 'ul';
+          const content = orderedMatch ? orderedMatch[2] : unorderedMatch[1];
+
+          if (inList && listType !== currentType) {
+            closeList();
+          }
+
           if (!inList) {
             inList = true;
-            prefix = '<ul style="margin: 8px 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; list-style-type: disc;">';
+            listType = currentType;
+            if (currentType === 'ol') {
+              output.push('<ol style="margin: 8px 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; list-style-type: decimal; color: #1e293b;">');
+            } else {
+              output.push('<ul style="margin: 8px 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; list-style-type: disc; color: #1e293b;">');
+            }
           }
-          return prefix + `<li>${content}</li>`;
-        } else {
-          let suffix = '';
-          if (inList) {
-            inList = false;
-            suffix = '</ul>';
+
+          if (currentType === 'ol') {
+            const num = orderedMatch[1];
+            output.push(`<li value="${num}" style="line-height: 1.6;">${inlineParse(content)}</li>`);
+          } else {
+            output.push(`<li style="line-height: 1.6;">${inlineParse(content)}</li>`);
           }
-          return suffix + (trimmed ? `<p style="margin: 8px 0;">${trimmed}</p>` : '');
+          continue;
         }
-      });
-      if (inList) {
-        parsedLines.push('</ul>');
+
+        // 7. Regular paragraph
+        closeList();
+        output.push(`<p style="margin: 8px 0; line-height: 1.6;">${inlineParse(trimmed)}</p>`);
       }
 
-      return parsedLines.join('');
+      closeList();
+      if (inTable) flushTable();
+
+      return output.join('');
+
+      function inlineParse(text) {
+        let t = text;
+        t = t.replace(/`(.*?)`/g, '<code style="background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px;">$1</code>');
+        t = t.replace(/\*\*(?=\S)([^\*]+?)(?<=\S)\*\*/g, '<strong>$1</strong>');
+        t = t.replace(/__(?=\S)([^_]+?)(?<=\S)__/g, '<strong>$1</strong>');
+        t = t.replace(/\*(?=\S)([^\*]+?)(?<=\S)\*/g, '<em>$1</em>');
+        t = t.replace(/_(?=\S)([^_]+?)(?<=\S)_/g, '<em>$1</em>');
+        t = t.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" style="color: #4f46e5; text-decoration: underline; font-weight: 600;">$1</a>');
+        return t;
+      }
     };
 
     const LLM_PROVIDERS = {
